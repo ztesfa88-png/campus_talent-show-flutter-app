@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/providers/app_data_provider.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/theme/app_colors.dart';
@@ -136,6 +137,26 @@ class _HomeTab extends ConsumerWidget {
       },
       child: CustomScrollView(
         slivers: [
+          // Offline banner
+          SliverToBoxAdapter(
+            child: ref.watch(isOfflineProvider).maybeWhen(
+              data: (offline) => offline
+                  ? Container(
+                      color: const Color(0xFFFEF3C7),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: const Row(children: [
+                        Icon(Icons.wifi_off_rounded, color: Color(0xFFD97706), size: 16),
+                        SizedBox(width: 8),
+                        Expanded(child: Text(
+                          'You\'re offline — showing cached data',
+                          style: TextStyle(color: Color(0xFFD97706), fontSize: 12, fontWeight: FontWeight.w600),
+                        )),
+                      ]),
+                    )
+                  : const SizedBox.shrink(),
+              orElse: () => const SizedBox.shrink(),
+            ),
+          ),
           SliverToBoxAdapter(
             child: Container(
               decoration: const BoxDecoration(
@@ -444,7 +465,12 @@ class _PerformerCard extends ConsumerWidget {
               ),
             ]),
             const SizedBox(height: 5),
-            _StarRow(4.0),
+            Row(children: [
+              _StarRow(performer.averageScore),
+              const SizedBox(width: 6),
+              if (performer.voteCount > 0)
+                Text('(${performer.voteCount})', style: const TextStyle(color: AppColors.textHint, fontSize: 10)),
+            ]),
           ])),
           const SizedBox(width: 10),
           if (event != null)
@@ -604,7 +630,13 @@ class _PerformerSheetState extends ConsumerState<_PerformerSheet> with SingleTic
               const SizedBox(height: 2),
               Text('${p.talentType.value[0].toUpperCase()}${p.talentType.value.substring(1)} \u2022 ${p.experienceLevel.value}', style: const TextStyle(color: AppColors.textSub, fontSize: 13)),
               const SizedBox(height: 4),
-              _StarRow(4.0),
+              Row(children: [
+                _StarRow(p.averageScore),
+                const SizedBox(width: 6),
+                if (p.voteCount > 0)
+                  Text('${p.averageScore.toStringAsFixed(1)} (${p.voteCount})',
+                      style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+              ]),
             ])),
             GestureDetector(
               onTap: () => Navigator.pop(context),
@@ -766,10 +798,10 @@ class _DetailRow extends StatelessWidget {
     child: Row(children: [
       Container(width: 36, height: 36, decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)), child: Icon(icon, color: AppColors.primary, size: 18)),
       const SizedBox(width: 12),
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(label, style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
-        Text(value, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w600, fontSize: 13)),
-      ]),
+        Text(value, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w600, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+      ])),
     ]),
   );
 }
@@ -843,7 +875,12 @@ class _VoteTab extends ConsumerWidget {
                       Text(name, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 14)),
                       Text(p.talentType.value, style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
                       const SizedBox(height: 3),
-                      _StarRow(3.5),
+                      Row(children: [
+                        _StarRow(p.averageScore),
+                        const SizedBox(width: 4),
+                        if (p.voteCount > 0)
+                          Text('(${p.voteCount})', style: const TextStyle(color: AppColors.textHint, fontSize: 10)),
+                      ]),
                     ])),
                     GestureDetector(
                       onTap: () => showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.transparent, builder: (_) => _PerformerSheet(performer: p, event: selectedEvent!)),
@@ -887,7 +924,6 @@ class _LeaderboardTab extends ConsumerWidget {
       ]));
     }
 
-    final stream = ref.watch(appDataServiceProvider).votesStream(event!.id);
     final performersAsync = ref.watch(performersProvider);
 
     return Column(children: [
@@ -902,17 +938,17 @@ class _LeaderboardTab extends ConsumerWidget {
           Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: const Color(0xFFDCFCE7), borderRadius: BorderRadius.circular(20)), child: const Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.circle, color: AppColors.accent, size: 7), SizedBox(width: 5), Text('Live', style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.w700, fontSize: 11))])),
         ]),
       ),
-      Expanded(child: StreamBuilder(
-        stream: stream,
-        builder: (_, snap) {
-          final votes = snap.data ?? [];
-          final countMap = <String, int>{};
-          for (final v in votes) {
-            countMap[v.performerId] = (countMap[v.performerId] ?? 0) + 1;
-          }
-          return performersAsync.when(
+      Expanded(child: performersAsync.when(
             data: (performers) {
-              final ranked = performers.map((p) => (performer: p, votes: countMap[p.id] ?? 0)).toList()..sort((a, b) => b.votes.compareTo(a.votes));
+              // Composite rank: votes * 0.6 + (avgScore/5) * 0.4
+              final ranked = performers
+                  .map((p) => (performer: p, votes: p.voteCount, avg: p.averageScore))
+                  .toList()
+                ..sort((a, b) {
+                  final sA = a.votes * 0.6 + (a.avg / 5.0) * 0.4;
+                  final sB = b.votes * 0.6 + (b.avg / 5.0) * 0.4;
+                  return sB.compareTo(sA);
+                });
               if (ranked.isEmpty) return const Center(child: Text('No performers yet', style: TextStyle(color: AppColors.textSub)));
               return ListView.builder(
                 padding: const EdgeInsets.all(20),
@@ -941,7 +977,15 @@ class _LeaderboardTab extends ConsumerWidget {
                       const SizedBox(width: 12),
                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text(name, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 14)),
-                        Text(item.performer.talentType.value, style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
+                        const SizedBox(height: 2),
+                        Row(children: [
+                          Text(item.performer.talentType.value, style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
+                          if (item.avg > 0) ...[
+                            const SizedBox(width: 6),
+                            const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 12),
+                            Text(item.avg.toStringAsFixed(1), style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.w700)),
+                          ],
+                        ]),
                       ])),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -959,93 +1003,156 @@ class _LeaderboardTab extends ConsumerWidget {
             },
             loading: () => const Center(child: CircularProgressIndicator(color: AppColors.primary)),
             error: (_, _) => const Center(child: Text('Unable to load', style: TextStyle(color: AppColors.textSub))),
-          );
-        },
-      )),
+          )),
     ]);
   }
 }
 
 // --- Notifications Tab --------------------------------------------------------
 
-class _NotificationsTab extends ConsumerWidget {
+class _NotificationsTab extends ConsumerStatefulWidget {
   const _NotificationsTab({required this.userId});
   final String userId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final stream = ref.watch(appDataServiceProvider).notificationsStream(userId);
-    return Column(children: [
-      Container(
-        padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 16, 20, 16),
-        decoration: const BoxDecoration(color: AppColors.surface, border: Border(bottom: BorderSide(color: AppColors.border))),
-        child: const Text('Notifications', style: TextStyle(color: AppColors.textMain, fontSize: 24, fontWeight: FontWeight.w900)),
-      ),
-      Expanded(child: StreamBuilder(
-        stream: stream,
-        builder: (_, snap) {
-          final notifications = snap.data ?? [];
-          if (notifications.isEmpty) {
-            return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(width: 80, height: 80, decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(24), border: Border.all(color: AppColors.border)), child: const Icon(Icons.notifications_none_rounded, color: AppColors.textHint, size: 40)),
-              const SizedBox(height: 16),
-              const Text('No notifications yet', style: TextStyle(color: AppColors.textSub, fontSize: 15)),
-            ]));
-          }
-          return ListView.builder(
-            padding: const EdgeInsets.all(20),
-            itemCount: notifications.length,
-            itemBuilder: (_, i) {
-              final n = notifications[i];
-              final typeColors = <String, Color>{
-                'success': AppColors.accent, 'error': AppColors.error,
-                'warning': const Color(0xFFD97706), 'info': AppColors.primary,
-              };
-              final typeIcons = <String, IconData>{
-                'success': Icons.check_circle_rounded, 'error': Icons.error_rounded,
-                'warning': Icons.warning_rounded, 'info': Icons.notifications_rounded,
-              };
-              final type = n.type.value;
-              final color = typeColors[type] ?? AppColors.primary;
-              final icon = typeIcons[type] ?? Icons.notifications_rounded;
-              return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: n.isRead ? AppColors.surface : const Color(0xFFF5F3FF),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: n.isRead ? AppColors.border : AppColors.primary.withValues(alpha: 0.25)),
-                  boxShadow: AppColors.cardShadow,
-                ),
-                child: Row(children: [
-                  Container(
-                    width: 44, height: 44,
+  ConsumerState<_NotificationsTab> createState() => _NotificationsTabState();
+}
+
+class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
+  final _supabase = Supabase.instance.client;
+
+  Future<void> _markRead(String id) async {
+    try {
+      await _supabase
+          .from('notifications')
+          .update({'is_read': true})
+          .eq('id', id);
+    } catch (_) {}
+  }
+
+  Future<void> _markAllRead(List notifications) async {
+    try {
+      await _supabase
+          .from('notifications')
+          .update({'is_read': true})
+          .eq('user_id', widget.userId)
+          .eq('is_read', false);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stream = ref.watch(appDataServiceProvider).notificationsStream(widget.userId);
+    return StreamBuilder(
+      stream: stream,
+      builder: (_, snap) {
+        final notifications = snap.data ?? [];
+        final unread = notifications.where((n) => !n.isRead).length;
+        return Column(children: [
+          // Header with unread count + mark-all-read
+          Container(
+            padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 16, 20, 16),
+            decoration: const BoxDecoration(
+                color: AppColors.surface,
+                border: Border(bottom: BorderSide(color: AppColors.border))),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('Notifications',
+                    style: TextStyle(
+                        color: AppColors.textMain,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900)),
+                if (unread > 0)
+                  Text('$unread unread',
+                      style: const TextStyle(
+                          color: AppColors.primary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+              ])),
+              if (unread > 0)
+                GestureDetector(
+                  onTap: () => _markAllRead(notifications),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                     decoration: BoxDecoration(
-                      gradient: n.isRead ? null : AppColors.primaryGradient,
-                      color: n.isRead ? AppColors.surfaceAlt : null,
-                      borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: Icon(n.isRead ? Icons.notifications_none_rounded : icon, color: n.isRead ? AppColors.textHint : Colors.white, size: 22),
+                        color: const Color(0xFFEEF2FF),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: const Text('Mark all read',
+                        style: TextStyle(
+                            color: AppColors.primary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700)),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(n.title, style: TextStyle(color: AppColors.textMain, fontWeight: n.isRead ? FontWeight.w500 : FontWeight.w700, fontSize: 14)),
-                    const SizedBox(height: 2),
-                    Text(n.message, style: const TextStyle(color: AppColors.textSub, fontSize: 12, height: 1.4), maxLines: 2, overflow: TextOverflow.ellipsis),
-                  ])),
-                  const SizedBox(width: 8),
-                  Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                    if (!n.isRead) Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-                    const SizedBox(height: 4),
-                    Text('${n.createdAt.hour.toString().padLeft(2, '0')}:${n.createdAt.minute.toString().padLeft(2, '0')}', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
-                  ]),
-                ]),
-              );
-            },
-          );
-        },
-      )),
-    ]);
+                ),
+            ]),
+          ),
+          // List
+          Expanded(child: notifications.isEmpty
+            ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(width: 80, height: 80, decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(24), border: Border.all(color: AppColors.border)), child: const Icon(Icons.notifications_none_rounded, color: AppColors.textHint, size: 40)),
+                const SizedBox(height: 16),
+                const Text('No notifications yet', style: TextStyle(color: AppColors.textSub, fontSize: 15)),
+              ]))
+            : ListView.builder(
+                padding: const EdgeInsets.all(20),
+                itemCount: notifications.length,
+                itemBuilder: (_, i) {
+                  final n = notifications[i];
+                  final typeColors = <String, Color>{
+                    'success': AppColors.accent, 'error': AppColors.error,
+                    'warning': const Color(0xFFD97706), 'info': AppColors.primary,
+                  };
+                  final typeIcons = <String, IconData>{
+                    'success': Icons.check_circle_rounded, 'error': Icons.error_rounded,
+                    'warning': Icons.warning_rounded, 'info': Icons.notifications_rounded,
+                  };
+                  final type = n.type.value;
+                  final color = typeColors[type] ?? AppColors.primary;
+                  final icon = typeIcons[type] ?? Icons.notifications_rounded;
+                  return GestureDetector(
+                    onTap: n.isRead ? null : () => _markRead(n.id),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: n.isRead ? AppColors.surface : const Color(0xFFF5F3FF),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: n.isRead ? AppColors.border : AppColors.primary.withValues(alpha: 0.25)),
+                        boxShadow: AppColors.cardShadow,
+                      ),
+                      child: Row(children: [
+                        Container(
+                          width: 44, height: 44,
+                          decoration: BoxDecoration(
+                            gradient: n.isRead ? null : AppColors.primaryGradient,
+                            color: n.isRead ? AppColors.surfaceAlt : null,
+                            borderRadius: BorderRadius.circular(13),
+                          ),
+                          child: Icon(n.isRead ? Icons.notifications_none_rounded : icon,
+                              color: n.isRead ? AppColors.textHint : Colors.white, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(n.title, style: TextStyle(color: AppColors.textMain, fontWeight: n.isRead ? FontWeight.w500 : FontWeight.w700, fontSize: 14)),
+                          const SizedBox(height: 2),
+                          Text(n.message, style: const TextStyle(color: AppColors.textSub, fontSize: 12, height: 1.4), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        ])),
+                        const SizedBox(width: 8),
+                        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                          if (!n.isRead) Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                          const SizedBox(height: 4),
+                          Text('${n.createdAt.hour.toString().padLeft(2, '0')}:${n.createdAt.minute.toString().padLeft(2, '0')}',
+                              style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+                        ]),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+          ),
+        ]);
+      },
+    );
   }
 }
 
@@ -1086,11 +1193,75 @@ class _ProfileTab extends ConsumerWidget {
         const SizedBox(height: 24),
         const Text('Account', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1)),
         const SizedBox(height: 10),
-        _ProfileTile(emoji: '\u{1F6E1}\u{FE0F}', title: 'Voting Security', subtitle: 'Duplicate vote prevention & cooldown active', color: AppColors.primary),
+        _ProfileTile(
+          emoji: '\u{1F6E1}\u{FE0F}',
+          title: 'Voting Security',
+          subtitle: 'Duplicate vote prevention & cooldown active',
+          color: AppColors.primary,
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text('Voting Security', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800)),
+              content: const Text(
+                '• One vote per performer per event\n'
+                '• 15-second cooldown between votes\n'
+                '• Vote limit enforced per event\n'
+                '• Voting deadline respected\n'
+                '• All rules enforced server-side via Supabase RLS',
+                style: TextStyle(color: AppColors.textSub, fontSize: 13, height: 1.6),
+              ),
+              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Got it'))],
+            ),
+          ),
+        ),
         const SizedBox(height: 10),
-        _ProfileTile(emoji: '\u{1F4F6}', title: 'Offline Cache', subtitle: 'Performers & events cached for offline access', color: AppColors.secondary),
+        _ProfileTile(
+          emoji: '\u{1F4F6}',
+          title: 'Offline Cache',
+          subtitle: 'Performers & events cached for offline access',
+          color: AppColors.secondary,
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text('Offline Cache', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800)),
+              content: const Text(
+                'Performer and event data is cached locally using SQLite. '
+                'When you lose connectivity, the app automatically falls back '
+                'to the last cached data so you can still browse performers.',
+                style: TextStyle(color: AppColors.textSub, fontSize: 13, height: 1.6),
+              ),
+              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Got it'))],
+            ),
+          ),
+        ),
         const SizedBox(height: 10),
-        _ProfileTile(emoji: '\u{1F514}', title: 'Notifications', subtitle: 'Real-time event & voting updates enabled', color: AppColors.accent),
+        _ProfileTile(
+          emoji: '\u{1F514}',
+          title: 'Notifications',
+          subtitle: 'Real-time event & voting updates enabled',
+          color: AppColors.accent,
+          onTap: () => showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              backgroundColor: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text('Notifications', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800)),
+              content: const Text(
+                'You receive real-time notifications for:\n'
+                '• Vote confirmations\n'
+                '• Event status changes\n'
+                '• Admin broadcasts\n\n'
+                'Notifications are delivered via Supabase Realtime.',
+                style: TextStyle(color: AppColors.textSub, fontSize: 13, height: 1.6),
+              ),
+              actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Got it'))],
+            ),
+          ),
+        ),
         const SizedBox(height: 28),
         SizedBox(
           height: 52,
@@ -1110,22 +1281,25 @@ class _ProfileTab extends ConsumerWidget {
 }
 
 class _ProfileTile extends StatelessWidget {
-  const _ProfileTile({required this.emoji, required this.title, required this.subtitle, required this.color});
-  final String emoji, title, subtitle; final Color color;
+  const _ProfileTile({required this.emoji, required this.title, required this.subtitle, required this.color, this.onTap});
+  final String emoji, title, subtitle; final Color color; final VoidCallback? onTap;
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border), boxShadow: AppColors.cardShadow),
-    child: Row(children: [
-      Container(width: 44, height: 44, decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(13)), child: Center(child: Text(emoji, style: const TextStyle(fontSize: 22)))),
-      const SizedBox(width: 14),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 14)),
-        const SizedBox(height: 2),
-        Text(subtitle, style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
-      ])),
-      const Icon(Icons.chevron_right_rounded, color: AppColors.textHint, size: 20),
-    ]),
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border), boxShadow: AppColors.cardShadow),
+      child: Row(children: [
+        Container(width: 44, height: 44, decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(13)), child: Center(child: Text(emoji, style: const TextStyle(fontSize: 22)))),
+        const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 14)),
+          const SizedBox(height: 2),
+          Text(subtitle, style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
+        ])),
+        const Icon(Icons.chevron_right_rounded, color: AppColors.textHint, size: 20),
+      ]),
+    ),
   );
 }
 

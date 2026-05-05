@@ -1,515 +1,226 @@
--- ========================================
--- SUPABASE ROW LEVEL SECURITY POLICIES
--- ========================================
+-- =============================================================================
+-- Campus Talent Show — Row Level Security Policies
+-- Run AFTER schema.sql (or after migrations/001_missing_columns.sql on
+-- an existing project).
+-- Safe to re-run: all policies use CREATE POLICY IF NOT EXISTS or are
+-- dropped first.
+-- =============================================================================
 
--- Enable RLS on all tables
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE performers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
+-- ---------------------------------------------------------------------------
+-- Enable RLS on every table
+-- ---------------------------------------------------------------------------
+alter table public.users              enable row level security;
+alter table public.performers         enable row level security;
+alter table public.events             enable row level security;
+alter table public.event_registrations enable row level security;
+alter table public.votes              enable row level security;
+alter table public.feedback           enable row level security;
+alter table public.notifications      enable row level security;
 
--- ========================================
--- USERS TABLE POLICIES
--- ========================================
+-- ---------------------------------------------------------------------------
+-- Helper: is the current user an admin?
+-- ---------------------------------------------------------------------------
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.users
+    where id = auth.uid() and role = 'admin'
+  );
+$$;
 
--- Users can read all users (public profiles)
-CREATE POLICY "Users can read all users" ON users
-    FOR SELECT USING (true);
+-- =============================================================================
+-- USERS
+-- =============================================================================
+drop policy if exists "users_select"        on public.users;
+drop policy if exists "users_insert_own"    on public.users;
+drop policy if exists "users_update_own"    on public.users;
+drop policy if exists "users_admin_all"     on public.users;
 
--- Users can update their own profile
-CREATE POLICY "Users can update own profile" ON users
-    FOR UPDATE USING (auth.uid() = id);
+-- Anyone authenticated can read all user rows (needed for name lookups)
+create policy "users_select" on public.users
+  for select using (true);
 
--- Users can insert their own profile (registration)
-CREATE POLICY "Users can insert own profile" ON users
-    FOR INSERT WITH CHECK (auth.uid() = id);
+-- A user can insert only their own row
+create policy "users_insert_own" on public.users
+  for insert with check (auth.uid() = id);
 
--- Admins have full access to users table
-CREATE POLICY "Admins full access to users" ON users
-    FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
+-- A user can update only their own row; admins can update any row
+create policy "users_update_own" on public.users
+  for update using (auth.uid() = id or public.is_admin());
 
--- ========================================
--- PERFORMERS TABLE POLICIES
--- ========================================
+-- Admins can delete users
+create policy "users_admin_all" on public.users
+  for delete using (public.is_admin());
 
--- All authenticated users can read performers (public profiles)
-CREATE POLICY "All users can read performers" ON performers
-    FOR SELECT USING (true);
+-- =============================================================================
+-- PERFORMERS
+-- =============================================================================
+drop policy if exists "performers_select"       on public.performers;
+drop policy if exists "performers_insert_own"   on public.performers;
+drop policy if exists "performers_update_own"   on public.performers;
+drop policy if exists "performers_admin_all"    on public.performers;
 
--- Performers can update their own performer profile
-CREATE POLICY "Performers can update own profile" ON performers
-    FOR UPDATE USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'performer'
-            AND user_id = auth.uid()
-        )
-    );
+-- Everyone can read approved performers; performers can read their own row
+create policy "performers_select" on public.performers
+  for select using (
+    approval_status = 'approved'
+    or id = auth.uid()
+    or public.is_admin()
+  );
 
--- Performers can insert their own performer profile
-CREATE POLICY "Performers can insert own profile" ON performers
-    FOR INSERT WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'performer'
-            AND user_id = auth.uid()
-        )
-    );
+-- A performer can insert only their own row
+create policy "performers_insert_own" on public.performers
+  for insert with check (auth.uid() = id);
 
--- Admins have full access to performers table
-CREATE POLICY "Admins full access to performers" ON performers
-    FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
+-- A performer can update only their own row; admins can update any row
+create policy "performers_update_own" on public.performers
+  for update using (auth.uid() = id or public.is_admin());
 
--- ========================================
--- EVENTS TABLE POLICIES
--- ========================================
+-- Admins can delete performer rows
+create policy "performers_admin_all" on public.performers
+  for delete using (public.is_admin());
 
--- All authenticated users can read events
-CREATE POLICY "All users can read events" ON events
-    FOR SELECT USING (true);
+-- =============================================================================
+-- EVENTS
+-- =============================================================================
+drop policy if exists "events_select"     on public.events;
+drop policy if exists "events_admin_all"  on public.events;
 
--- Admins have full access to events table
-CREATE POLICY "Admins full access to events" ON events
-    FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
+-- Everyone can read events
+create policy "events_select" on public.events
+  for select using (true);
 
--- ========================================
--- VOTES TABLE POLICIES
--- ========================================
+-- Only admins can insert / update / delete events
+create policy "events_admin_all" on public.events
+  for all using (public.is_admin())
+  with check (public.is_admin());
 
--- Users can read their own votes
-CREATE POLICY "Users can read own votes" ON votes
-    FOR SELECT USING (user_id = auth.uid());
+-- =============================================================================
+-- EVENT REGISTRATIONS
+-- =============================================================================
+drop policy if exists "regs_select"           on public.event_registrations;
+drop policy if exists "regs_insert_performer" on public.event_registrations;
+drop policy if exists "regs_update_own"       on public.event_registrations;
+drop policy if exists "regs_delete_own"       on public.event_registrations;
+drop policy if exists "regs_admin_all"        on public.event_registrations;
 
--- Users can insert votes (one vote per performer per user)
-CREATE POLICY "Users can insert votes" ON votes
-    FOR INSERT WITH CHECK (
-        user_id = auth.uid() AND
-        -- Ensure one vote per performer per user
-        NOT EXISTS (
-            SELECT 1 FROM votes 
-            WHERE user_id = auth.uid() 
-            AND performer_id = NEW.performer_id
-            AND event_id = NEW.event_id
-        )
-    );
+-- Performers can see their own registrations; admins see all
+create policy "regs_select" on public.event_registrations
+  for select using (
+    performer_id = auth.uid()
+    or public.is_admin()
+  );
 
--- Users can update their own votes (change rating)
-CREATE POLICY "Users can update own votes" ON votes
-    FOR UPDATE USING (user_id = auth.uid());
+-- Performers can register themselves
+create policy "regs_insert_performer" on public.event_registrations
+  for insert with check (
+    auth.uid() = performer_id
+    and exists (
+      select 1 from public.users
+      where id = auth.uid() and role = 'performer'
+    )
+  );
 
--- Admins have full access to votes table
-CREATE POLICY "Admins full access to votes" ON votes
-    FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
+-- Performers can update their own pending registrations; admins can update any
+create policy "regs_update_own" on public.event_registrations
+  for update using (
+    (auth.uid() = performer_id and status = 'pending')
+    or public.is_admin()
+  );
 
--- ========================================
--- NOTIFICATIONS TABLE POLICIES
--- ========================================
+-- Performers can cancel their own registrations; admins can delete any
+create policy "regs_delete_own" on public.event_registrations
+  for delete using (
+    auth.uid() = performer_id
+    or public.is_admin()
+  );
 
--- Users can read their own notifications
-CREATE POLICY "Users can read own notifications" ON notifications
-    FOR SELECT USING (user_id = auth.uid());
+-- =============================================================================
+-- VOTES
+-- =============================================================================
+drop policy if exists "votes_select"        on public.votes;
+drop policy if exists "votes_insert_student" on public.votes;
+drop policy if exists "votes_admin_all"     on public.votes;
 
--- Users can update their own notifications (mark as read)
-CREATE POLICY "Users can update own notifications" ON notifications
-    FOR UPDATE USING (user_id = auth.uid());
+-- Users can read all votes (needed for leaderboard); own votes always visible
+create policy "votes_select" on public.votes
+  for select using (true);
 
--- System can insert notifications (for targeted notifications)
-CREATE POLICY "System can insert notifications" ON notifications
-    FOR INSERT WITH CHECK (true);
+-- Only students can insert votes; enforced by trigger + unique index too
+create policy "votes_insert_student" on public.votes
+  for insert with check (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.users
+      where id = auth.uid() and role = 'student'
+    )
+  );
 
--- Admins have full access to notifications table
-CREATE POLICY "Admins full access to notifications" ON notifications
-    FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
+-- Admins can manage all votes (e.g. reset for an event)
+create policy "votes_admin_all" on public.votes
+  for all using (public.is_admin())
+  with check (public.is_admin());
 
--- ========================================
--- FEEDBACK TABLE POLICIES
--- ========================================
+-- =============================================================================
+-- FEEDBACK
+-- =============================================================================
+drop policy if exists "feedback_select"         on public.feedback;
+drop policy if exists "feedback_insert_student" on public.feedback;
+drop policy if exists "feedback_update_own"     on public.feedback;
+drop policy if exists "feedback_admin_all"      on public.feedback;
 
--- All authenticated users can read feedback (public)
-CREATE POLICY "All users can read feedback" ON feedback
-    FOR SELECT USING (true);
+-- Public feedback is readable by everyone; private only by owner or admin
+create policy "feedback_select" on public.feedback
+  for select using (
+    is_public = true
+    or user_id = auth.uid()
+    or public.is_admin()
+  );
 
--- Users can insert their own feedback
-CREATE POLICY "Users can insert own feedback" ON feedback
-    FOR INSERT WITH CHECK (user_id = auth.uid());
+-- Students can submit feedback
+create policy "feedback_insert_student" on public.feedback
+  for insert with check (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.users
+      where id = auth.uid() and role = 'student'
+    )
+  );
 
 -- Users can update their own feedback
-CREATE POLICY "Users can update own feedback" ON feedback
-    FOR UPDATE USING (user_id = auth.uid());
+create policy "feedback_update_own" on public.feedback
+  for update using (auth.uid() = user_id);
 
--- Admins have full access to feedback table
-CREATE POLICY "Admins full access to feedback" ON feedback
-    FOR ALL USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
+-- Admins can manage all feedback
+create policy "feedback_admin_all" on public.feedback
+  for all using (public.is_admin())
+  with check (public.is_admin());
 
--- ========================================
--- ADDITIONAL SECURITY MEASURES
--- ========================================
+-- =============================================================================
+-- NOTIFICATIONS
+-- =============================================================================
+drop policy if exists "notifs_select_own"  on public.notifications;
+drop policy if exists "notifs_insert"      on public.notifications;
+drop policy if exists "notifs_update_own"  on public.notifications;
+drop policy if exists "notifs_admin_all"   on public.notifications;
 
--- Create function to check if user is admin
-CREATE OR REPLACE FUNCTION is_admin() 
-RETURNS BOOLEAN AS $$
-BEGIN
-    RETURN EXISTS (
-        SELECT 1 FROM users 
-        WHERE id = auth.uid() 
-        AND role = 'admin'
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+-- Users can only read their own notifications
+create policy "notifs_select_own" on public.notifications
+  for select using (user_id = auth.uid() or public.is_admin());
 
--- Create function to check if user owns performer profile
-CREATE OR REPLACE FUNCTION owns_performer(performer_id UUID) 
-RETURNS BOOLEAN AS $$
-BEGIN
-    RETURN EXISTS (
-        SELECT 1 FROM performers 
-        WHERE id = performer_id 
-        AND user_id = auth.uid()
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+-- Any authenticated user (or service role) can insert notifications
+-- (needed for vote confirmations, broadcast, etc.)
+create policy "notifs_insert" on public.notifications
+  for insert with check (true);
 
--- Create function to check if user has already voted
-CREATE OR REPLACE FUNCTION has_voted_for_performer(performer_id UUID, event_id UUID) 
-RETURNS BOOLEAN AS $$
-BEGIN
-    RETURN EXISTS (
-        SELECT 1 FROM votes 
-        WHERE user_id = auth.uid() 
-        AND performer_id = performer_id
-        AND event_id = event_id
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+-- Users can mark their own notifications as read
+create policy "notifs_update_own" on public.notifications
+  for update using (user_id = auth.uid() or public.is_admin());
 
--- Create trigger to prevent duplicate votes
-CREATE OR REPLACE FUNCTION prevent_duplicate_votes()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM votes 
-        WHERE user_id = NEW.user_id 
-        AND performer_id = NEW.performer_id
-        AND event_id = NEW.event_id
-    ) THEN
-        RAISE EXCEPTION 'User has already voted for this performer in this event';
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Apply the trigger
-CREATE TRIGGER prevent_duplicate_votes_trigger
-    BEFORE INSERT OR UPDATE ON votes
-    FOR EACH ROW
-    EXECUTE FUNCTION prevent_duplicate_votes();
-
--- ========================================
--- VIEWS FOR COMMON QUERIES
--- ========================================
-
--- View for performer statistics (public)
-CREATE VIEW performer_stats AS
-SELECT 
-    p.id,
-    p.name,
-    p.talent_type,
-    p.experience_level,
-    COUNT(v.id) as total_votes,
-    COALESCE(AVG(v.score), 0) as average_score,
-    p.created_at,
-    p.updated_at
-FROM performers p
-LEFT JOIN votes v ON p.id = v.performer_id
-GROUP BY p.id, p.name, p.talent_type, p.experience_level, p.created_at, p.updated_at;
-
--- View for event statistics (admin only through RLS)
-CREATE VIEW event_stats AS
-SELECT 
-    e.id,
-    e.title,
-    e.description,
-    e.date,
-    e.location,
-    e.status,
-    COUNT(DISTINCT p.id) as performer_count,
-    COUNT(DISTINCT v.user_id) as voter_count,
-    COUNT(v.id) as total_votes,
-    COALESCE(AVG(v.score), 0) as average_score,
-    e.created_at,
-    e.updated_at
-FROM events e
-LEFT JOIN performers p ON e.id = p.event_id
-LEFT JOIN votes v ON e.id = v.event_id
-GROUP BY e.id, e.title, e.description, e.date, e.location, e.status, e.created_at, e.updated_at;
-
--- View for user voting history (own votes only through RLS)
-CREATE VIEW user_voting_history AS
-SELECT 
-    v.id,
-    v.event_id,
-    e.title as event_title,
-    v.performer_id,
-    p.name as performer_name,
-    p.talent_type,
-    v.score,
-    v.voted_at
-FROM votes v
-JOIN events e ON v.event_id = e.id
-JOIN performers p ON v.performer_id = p.id;
-
--- ========================================
--- INDEXES FOR PERFORMANCE
--- ========================================
-
--- Indexes for users table
-CREATE INDEX idx_users_role ON users(role);
-CREATE INDEX idx_users_email ON users(email);
-
--- Indexes for performers table
-CREATE INDEX idx_performers_user_id ON performers(user_id);
-CREATE INDEX idx_performers_talent_type ON performers(talent_type);
-CREATE INDEX idx_performers_experience_level ON performers(experience_level);
-
--- Indexes for votes table
-CREATE INDEX idx_votes_user_id ON votes(user_id);
-CREATE INDEX idx_votes_performer_id ON votes(performer_id);
-CREATE INDEX idx_votes_event_id ON votes(event_id);
-CREATE INDEX idx_votes_composite ON votes(user_id, performer_id, event_id);
-
--- Indexes for notifications table
-CREATE INDEX idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX idx_notifications_type ON notifications(type);
-CREATE INDEX idx_notifications_created_at ON notifications(created_at);
-
--- Indexes for feedback table
-CREATE INDEX idx_feedback_user_id ON feedback(user_id);
-CREATE INDEX idx_feedback_created_at ON feedback(created_at);
-
--- ========================================
--- SAMPLE DATA FOR TESTING
--- ========================================
-
--- Insert sample admin user (remove in production)
--- INSERT INTO users (id, email, name, role, created_at, updated_at)
--- VALUES (
---     gen_random_uuid(),
---     'admin@campustalentshow.com',
---     'Admin User',
---     'admin',
---     NOW(),
-//     NOW()
-// );
-
--- ========================================
--- SECURITY FUNCTIONS
--- ========================================
-
--- Function to get current user role
-CREATE OR REPLACE FUNCTION current_user_role()
-RETURNS TEXT AS $$
-BEGIN
-    RETURN (
-        SELECT role FROM users 
-        WHERE id = auth.uid()
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Function to check if user can access performer data
-CREATE OR REPLACE FUNCTION can_access_performer_data(performer_id UUID, access_type TEXT)
-RETURNS BOOLEAN AS $$
-DECLARE
-    user_role TEXT;
-    performer_user_id UUID;
-BEGIN
-    -- Get current user role
-    SELECT role INTO user_role FROM users WHERE id = auth.uid();
-    
-    -- Get performer's user_id
-    SELECT user_id INTO performer_user_id FROM performers WHERE id = performer_id;
-    
-    -- Admins can access all performer data
-    IF user_role = 'admin' THEN
-        RETURN true;
-    END IF;
-    
-    -- Performers can access their own data
-    IF user_role = 'performer' AND performer_user_id = auth.uid() THEN
-        RETURN true;
-    END IF;
-    
-    -- Students can read performer data
-    IF user_role = 'student' AND access_type = 'read' THEN
-        RETURN true;
-    END IF;
-    
-    RETURN false;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Function to validate vote constraints
-CREATE OR REPLACE FUNCTION validate_vote_constraints(performer_id UUID, event_id UUID)
-RETURNS BOOLEAN AS $$
-DECLARE
-    user_role TEXT;
-    event_status TEXT;
-BEGIN
-    -- Get current user role
-    SELECT role INTO user_role FROM users WHERE id = auth.uid();
-    
-    -- Get event status
-    SELECT status INTO event_status FROM events WHERE id = event_id;
-    
-    -- Only students can vote
-    IF user_role != 'student' THEN
-        RETURN false;
-    END IF;
-    
-    -- Event must be active for voting
-    IF event_status != 'active' THEN
-        RETURN false;
-    END IF;
-    
-    -- Check if user hasn't already voted for this performer
-    IF EXISTS (
-        SELECT 1 FROM votes 
-        WHERE user_id = auth.uid() 
-        AND performer_id = performer_id
-        AND event_id = event_id
-    ) THEN
-        RETURN false;
-    END IF;
-    
-    RETURN true;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- ========================================
--- TRIGGERS FOR DATA INTEGRITY
--- ========================================
-
--- Trigger to update performer stats when vote is inserted
-CREATE OR REPLACE FUNCTION update_performer_stats()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- This would typically be handled by materialized views or scheduled jobs
-    -- For now, we'll leave this as a placeholder
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER update_performer_stats_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON votes
-    FOR EACH ROW
-    EXECUTE FUNCTION update_performer_stats();
-
--- ========================================
--- AUDIT LOGGING
--- ========================================
-
--- Create audit log table
-CREATE TABLE IF NOT EXISTS audit_log (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    table_name TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    user_id UUID REFERENCES users(id),
-    old_values JSONB,
-    new_values JSONB,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
--- Enable RLS on audit log
-ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
-
--- Only admins can read audit logs
-CREATE POLICY "Admins can read audit logs" ON audit_log
-    FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM users 
-            WHERE id = auth.uid() 
-            AND role = 'admin'
-        )
-    );
-
--- System can insert audit logs
-CREATE POLICY "System can insert audit logs" ON audit_log
-    FOR INSERT WITH CHECK (true);
-
--- Trigger to log changes
-CREATE OR REPLACE FUNCTION log_changes()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        INSERT INTO audit_log (table_name, operation, user_id, new_values)
-        VALUES (TG_TABLE_NAME, TG_OP, auth.uid(), to_jsonb(NEW));
-        RETURN NEW;
-    ELSIF TG_OP = 'UPDATE' THEN
-        INSERT INTO audit_log (table_name, operation, user_id, old_values, new_values)
-        VALUES (TG_TABLE_NAME, TG_OP, auth.uid(), to_jsonb(OLD), to_jsonb(NEW));
-        RETURN NEW;
-    ELSIF TG_OP = 'DELETE' THEN
-        INSERT INTO audit_log (table_name, operation, user_id, old_values)
-        VALUES (TG_TABLE_NAME, TG_OP, auth.uid(), to_jsonb(OLD));
-        RETURN OLD;
-    END IF;
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Apply audit triggers to key tables
-CREATE TRIGGER users_audit_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON users
-    FOR EACH ROW EXECUTE FUNCTION log_changes();
-
-CREATE TRIGGER performers_audit_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON performers
-    FOR EACH ROW EXECUTE FUNCTION log_changes();
-
-CREATE TRIGGER votes_audit_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON votes
-    FOR EACH ROW EXECUTE FUNCTION log_changes();
-
-CREATE TRIGGER events_audit_trigger
-    AFTER INSERT OR UPDATE OR DELETE ON events
-    FOR EACH ROW EXECUTE FUNCTION log_changes();
+-- Admins can delete notifications
+create policy "notifs_admin_all" on public.notifications
+  for delete using (public.is_admin());

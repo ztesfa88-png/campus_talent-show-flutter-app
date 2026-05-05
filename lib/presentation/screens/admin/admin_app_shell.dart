@@ -31,6 +31,8 @@ class _AdminAppShellState extends ConsumerState<AdminAppShell> {
     (Icons.shield_rounded, Icons.shield_outlined, 'Admins'),
   ];
 
+  void _goToTab(int index) => setState(() => _tab = index);
+
   @override
   void dispose() { _titleCtrl.dispose(); _locationCtrl.dispose(); super.dispose(); }
 
@@ -39,7 +41,7 @@ class _AdminAppShellState extends ConsumerState<AdminAppShell> {
     final user = ref.watch(authStateProvider).user;
     final service = AppDataService();
     final bodies = [
-      _DashboardTab(service: service),
+      _DashboardTab(service: service, onTabChange: _goToTab),
       const _PerformersTab(),
       const _UsersTab(),
       _EventsTab(titleCtrl: _titleCtrl, locationCtrl: _locationCtrl),
@@ -158,8 +160,9 @@ SnackBar _snack(String msg, Color color) => SnackBar(
 // ─── Dashboard Tab ────────────────────────────────────────────────────────────
 
 class _DashboardTab extends ConsumerStatefulWidget {
-  const _DashboardTab({required this.service});
+  const _DashboardTab({required this.service, required this.onTabChange});
   final AppDataService service;
+  final ValueChanged<int> onTabChange;
   @override
   ConsumerState<_DashboardTab> createState() => _DashboardTabState();
 }
@@ -282,13 +285,13 @@ class _DashboardTabState extends ConsumerState<_DashboardTab> {
                   const Text('Quick Actions', style: TextStyle(color: AppColors.textMain, fontSize: 17, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 12),
                   Row(children: [
-                    _QuickAction(icon: Icons.mic_rounded, label: 'Performers', color: AppColors.secondary, onTap: () {}),
+                    _QuickAction(icon: Icons.mic_rounded, label: 'Performers', color: AppColors.secondary, onTap: () => widget.onTabChange(1)),
                     const SizedBox(width: 10),
-                    _QuickAction(icon: Icons.people_rounded, label: 'Users', color: AppColors.primary, onTap: () {}),
+                    _QuickAction(icon: Icons.people_rounded, label: 'Users', color: AppColors.primary, onTap: () => widget.onTabChange(2)),
                     const SizedBox(width: 10),
-                    _QuickAction(icon: Icons.event_rounded, label: 'Events', color: AppColors.accent, onTap: () {}),
+                    _QuickAction(icon: Icons.event_rounded, label: 'Events', color: AppColors.accent, onTap: () => widget.onTabChange(3)),
                     const SizedBox(width: 10),
-                    _QuickAction(icon: Icons.shield_rounded, label: 'Admins', color: const Color(0xFFD97706), onTap: () {}),
+                    _QuickAction(icon: Icons.shield_rounded, label: 'Admins', color: const Color(0xFFD97706), onTap: () => widget.onTabChange(4)),
                   ]),
                   const SizedBox(height: 20),
                   const Text('🏆 Top Performers', style: TextStyle(color: AppColors.textMain, fontSize: 17, fontWeight: FontWeight.w800)),
@@ -835,20 +838,27 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
   bool _creating = false;
   List<Map<String, dynamic>> _events = [];
   bool _loadingEvents = true;
+  final _descCtrl = TextEditingController();
 
   // Date/time state for create form
   DateTime _startDate = DateTime.now().add(const Duration(days: 7));
   TimeOfDay _startTime = const TimeOfDay(hour: 10, minute: 0);
   DateTime? _endDate;
   TimeOfDay? _endTime;
+  DateTime? _regDeadlineDate;
+  TimeOfDay? _regDeadlineTime;
   DateTime? _votingDeadlineDate;
   TimeOfDay? _votingDeadlineTime;
   DateTime? _expiresAtDate;
   TimeOfDay? _expiresAtTime;
-  int _votesPerUser = 1; // vote limit per student
+  int _votesPerUser = 1;
+  int _maxPerformers = 50;
 
   @override
   void initState() { super.initState(); _loadEvents(); }
+
+  @override
+  void dispose() { _descCtrl.dispose(); super.dispose(); }
 
   Future<void> _loadEvents() async {
     setState(() => _loadingEvents = true);
@@ -876,6 +886,16 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
   Future<void> _pickEndTime() async {
     final t = await showTimePicker(context: context, initialTime: _endTime ?? const TimeOfDay(hour: 18, minute: 0));
     if (t != null) setState(() => _endTime = t);
+  }
+
+  Future<void> _pickRegDeadlineDate() async {
+    final d = await showDatePicker(context: context, initialDate: _regDeadlineDate ?? _startDate, firstDate: DateTime.now(), lastDate: DateTime.now().add(const Duration(days: 365 * 2)));
+    if (d != null) setState(() => _regDeadlineDate = d);
+  }
+
+  Future<void> _pickRegDeadlineTime() async {
+    final t = await showTimePicker(context: context, initialTime: _regDeadlineTime ?? const TimeOfDay(hour: 23, minute: 59));
+    if (t != null) setState(() => _regDeadlineTime = t);
   }
 
   Future<void> _pickVotingDeadlineDate() async {
@@ -919,6 +939,9 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
       final realUserId = _supabase.auth.currentUser?.id;
       final startDt = _combine(_startDate, _startTime);
       final endDt = _endDate != null && _endTime != null ? _combine(_endDate!, _endTime!) : null;
+      final regDeadlineDt = _regDeadlineDate != null && _regDeadlineTime != null
+          ? _combine(_regDeadlineDate!, _regDeadlineTime!)
+          : null;
       final votingDeadlineDt = _votingDeadlineDate != null && _votingDeadlineTime != null
           ? _combine(_votingDeadlineDate!, _votingDeadlineTime!)
           : null;
@@ -927,22 +950,29 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
           : null;
       final payload = <String, dynamic>{
         'title': widget.titleCtrl.text.trim(),
+        'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
         'location': widget.locationCtrl.text.trim().isEmpty ? null : widget.locationCtrl.text.trim(),
         'event_date': startDt.toIso8601String(),
         if (endDt != null) 'end_date': endDt.toIso8601String(),
+        if (regDeadlineDt != null) 'registration_deadline': regDeadlineDt.toIso8601String(),
         if (votingDeadlineDt != null) 'voting_deadline': votingDeadlineDt.toIso8601String(),
         if (expiresAtDt != null) 'expires_at': expiresAtDt.toIso8601String(),
         'status': 'upcoming',
         'votes_per_user': _votesPerUser,
+        'max_performers': _maxPerformers,
       };
       if (realUserId != null) payload['created_by'] = realUserId;
       await _supabase.from('events').insert(payload);
-      widget.titleCtrl.clear(); widget.locationCtrl.clear();
+      widget.titleCtrl.clear();
+      widget.locationCtrl.clear();
+      _descCtrl.clear();
       setState(() {
         _endDate = null; _endTime = null;
+        _regDeadlineDate = null; _regDeadlineTime = null;
         _votingDeadlineDate = null; _votingDeadlineTime = null;
         _expiresAtDate = null; _expiresAtTime = null;
         _votesPerUser = 1;
+        _maxPerformers = 50;
       });
       ref.invalidate(eventsProvider);
       await _loadEvents();
@@ -998,6 +1028,12 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
           TextField(controller: widget.titleCtrl, decoration: const InputDecoration(hintText: 'Event title *', prefixIcon: Icon(Icons.event_rounded, size: 20))),
           const SizedBox(height: 10),
           TextField(controller: widget.locationCtrl, decoration: const InputDecoration(hintText: 'Location (optional)', prefixIcon: Icon(Icons.location_on_rounded, size: 20))),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _descCtrl,
+            maxLines: 3,
+            decoration: const InputDecoration(hintText: 'Description (optional)', prefixIcon: Padding(padding: EdgeInsets.only(bottom: 40), child: Icon(Icons.description_rounded, size: 20))),
+          ),
           const SizedBox(height: 14),
           // Start date & time
           const Text('Start', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
@@ -1041,7 +1077,33 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
               muted: _endTime == null,
             )),
           ]),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
+          // Registration deadline (optional)
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            const Text('Registration deadline (optional)', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
+            if (_regDeadlineDate != null)
+              GestureDetector(
+                onTap: () => setState(() { _regDeadlineDate = null; _regDeadlineTime = null; }),
+                child: const Text('Clear', style: TextStyle(color: AppColors.error, fontSize: 12, fontWeight: FontWeight.w600)),
+              ),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(child: _DateTimeChip(
+              icon: Icons.how_to_reg_rounded,
+              label: _regDeadlineDate != null ? _fmtDate(_regDeadlineDate!) : 'Deadline date',
+              onTap: _pickRegDeadlineDate,
+              muted: _regDeadlineDate == null,
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: _DateTimeChip(
+              icon: Icons.access_time_rounded,
+              label: _regDeadlineTime != null ? _fmtTime(_regDeadlineTime!) : 'Deadline time',
+              onTap: _pickRegDeadlineTime,
+              muted: _regDeadlineTime == null,
+            )),
+          ]),
+          const SizedBox(height: 12),
           // Voting deadline (optional)
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             const Text('Voting deadline (optional)', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
@@ -1118,6 +1180,32 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
           ]),
           const SizedBox(height: 4),
           Text('Each student can vote $_votesPerUser time${_votesPerUser == 1 ? '' : 's'} per event', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+          const SizedBox(height: 14),
+          // Max performers
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            const Text('Max performers', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                GestureDetector(
+                  onTap: () { if (_maxPerformers > 1) setState(() => _maxPerformers--); },
+                  child: Container(padding: const EdgeInsets.all(6), child: const Icon(Icons.remove_rounded, size: 16, color: AppColors.textSub)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.border)),
+                  child: Text('$_maxPerformers', style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800, fontSize: 14)),
+                ),
+                GestureDetector(
+                  onTap: () { if (_maxPerformers < 200) setState(() => _maxPerformers++); },
+                  child: Container(padding: const EdgeInsets.all(6), child: const Icon(Icons.add_rounded, size: 16, color: AppColors.textSub)),
+                ),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          Text('Maximum $_maxPerformers performer${_maxPerformers == 1 ? '' : 's'} can register', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
           const SizedBox(height: 14),
           SizedBox(height: 50, width: double.infinity, child: ElevatedButton(
             onPressed: _creating ? null : _create,

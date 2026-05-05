@@ -331,8 +331,16 @@ await Supabase.initialize(
 
 ### 4. Apply the database schema
 Run the SQL files in your Supabase SQL Editor in this order:
-1. `supabase/production_schema_upgrade.sql`
-2. `supabase/rls_policies.sql`
+
+**Fresh project:**
+1. `supabase/schema.sql` — creates all tables, indexes, triggers
+2. `supabase/rls_policies.sql` — row-level security policies
+3. `supabase/migrations/002_realtime_and_storage.sql` — Realtime + Storage bucket policies
+
+**Existing project (already has some tables):**
+1. `supabase/migrations/001_missing_columns.sql` — adds all missing columns idempotently
+2. `supabase/rls_policies.sql` — replaces all RLS policies
+3. `supabase/migrations/002_realtime_and_storage.sql` — Realtime + Storage bucket policies
 
 ### 5. Run the app
 ```bash
@@ -377,37 +385,20 @@ campus_talent_show/
 ### Required Supabase Configuration
 
 1. **Disable email confirmation** (for development):
-   Supabase Dashboard → Authentication → Providers → Email → toggle off "Confirm email"
+   Supabase Dashboard ? Authentication ? Providers ? Email ? toggle off "Confirm email"
 
-2. **Enable Realtime** on tables:
-   Supabase Dashboard → Database → Replication → enable `votes`, `notifications`, `events`
+2. **Enable Realtime** on tables � handled automatically by `migrations/002_realtime_and_storage.sql`, or manually:
+   Supabase Dashboard ? Database ? Replication ? enable `votes`, `notifications`, `events`
 
 3. **Create storage bucket**:
-   Supabase Dashboard → Storage → New bucket → name: `avatars` → Public: true
+   Supabase Dashboard ? Storage ? New bucket ? name: `avatars` ? Public: **true**
+   Then run `migrations/002_realtime_and_storage.sql` to apply the storage RLS policies.
 
-4. **Apply the `handle_new_user` trigger** (if registration fails with DB error):
-   ```sql
-   CREATE OR REPLACE FUNCTION public.handle_new_user()
-   RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
-   SET search_path = public AS $$
-   BEGIN
-     INSERT INTO public.users(id, email, name, role, created_at, updated_at)
-     VALUES (
-       NEW.id, NEW.email,
-       COALESCE(NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1)),
-       COALESCE(NEW.raw_user_meta_data->>'role', 'student'),
-       NOW(), NOW()
-     )
-     ON CONFLICT(id) DO UPDATE SET email = EXCLUDED.email, updated_at = NOW();
-     RETURN NEW;
-   END;
-   $$;
+4. **Password reset deep-link** � add your app URL to the redirect allow-list:
+   Supabase Dashboard ? Authentication ? URL Configuration ? Redirect URLs ? add `http://localhost:*` (dev) and your production URL.
+   The app handles the reset at the `/reset-password` route.
 
-   DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-   CREATE TRIGGER on_auth_user_created
-     AFTER INSERT ON auth.users FOR EACH ROW
-     EXECUTE FUNCTION public.handle_new_user();
-   ```
+5. **Apply the `handle_new_user` trigger** � included in both `schema.sql` and `migrations/001_missing_columns.sql`. No manual step needed if you ran either file.
 
 ### Dependencies
 

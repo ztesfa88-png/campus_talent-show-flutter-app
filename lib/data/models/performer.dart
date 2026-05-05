@@ -41,12 +41,15 @@ class Performer {
   final String? name;
   final UserRole role;
   final String? bio;
-  final String? avatarUrl; // profile picture URL from Supabase Storage
+  final String? avatarUrl;
   final TalentType talentType;
   final ExperienceLevel experienceLevel;
   final Map<String, dynamic> socialLinks;
   final DateTime createdAt;
   final DateTime? updatedAt;
+  // Transient — populated by the provider from the votes table
+  final double averageScore;
+  final int voteCount;
 
   const Performer({
     required this.id,
@@ -60,6 +63,8 @@ class Performer {
     this.socialLinks = const {},
     required this.createdAt,
     this.updatedAt,
+    this.averageScore = 0.0,
+    this.voteCount = 0,
   });
 
   factory Performer.fromJson(Map<String, dynamic> json) {
@@ -77,6 +82,8 @@ class Performer {
       updatedAt: json['updated_at'] != null
           ? DateTime.tryParse(json['updated_at'] as String)
           : null,
+      averageScore: (json['average_score'] as num?)?.toDouble() ?? 0.0,
+      voteCount: json['vote_count'] as int? ?? 0,
     );
   }
 
@@ -93,6 +100,8 @@ class Performer {
       'social_links': socialLinks,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
+      'average_score': averageScore,
+      'vote_count': voteCount,
     };
   }
 
@@ -108,6 +117,8 @@ class Performer {
     Map<String, dynamic>? socialLinks,
     DateTime? createdAt,
     DateTime? updatedAt,
+    double? averageScore,
+    int? voteCount,
   }) {
     return Performer(
       id: id ?? this.id,
@@ -121,6 +132,8 @@ class Performer {
       socialLinks: socialLinks ?? this.socialLinks,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      averageScore: averageScore ?? this.averageScore,
+      voteCount: voteCount ?? this.voteCount,
     );
   }
 }

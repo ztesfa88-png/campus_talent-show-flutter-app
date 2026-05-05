@@ -5,6 +5,7 @@ import '../../presentation/screens/auth/login_screen.dart';
 import '../../presentation/screens/auth/register_screen.dart';
 import '../../presentation/screens/auth/onboarding_screen.dart';
 import '../../presentation/screens/auth/splash_screen.dart';
+import '../../presentation/screens/auth/reset_password_screen.dart';
 import '../../presentation/screens/admin/admin_app_shell.dart';
 import '../../presentation/screens/performers/performer_app_shell.dart';
 import '../../presentation/screens/student/student_app_shell.dart';
@@ -25,7 +26,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isAuthRoute = currentPath.startsWith('/login') ||
           currentPath.startsWith('/register') ||
           currentPath.startsWith('/onboarding') ||
-          currentPath.startsWith('/splash');
+          currentPath.startsWith('/splash') ||
+          currentPath.startsWith('/reset-password');
 
       if (!isAuthenticated) {
         // Allow auth routes through; redirect everything else to login
@@ -63,6 +65,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/register',
         builder: (context, state) => const RegisterScreen(),
+      ),
+      GoRoute(
+        path: '/reset-password',
+        builder: (context, state) => const ResetPasswordScreen(),
       ),
       
       // Admin routes

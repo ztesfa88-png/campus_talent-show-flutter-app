@@ -382,9 +382,17 @@ class EventService {
 
   Future<bool> approvePerformer(String performerId) async {
     try {
-      // TODO: Implement approval status in database
-      // For now, we'll return true as a placeholder
-      debugPrint('Approving performer: $performerId');
+      await _supabase
+          .from('performers')
+          .update({'approval_status': 'approved'})
+          .eq('id', performerId);
+      await _supabase.from('notifications').insert({
+        'user_id': performerId,
+        'title': 'Profile Approved! ✅',
+        'message':
+            'Your performer profile has been approved. You can now register for events!',
+        'type': 'success',
+      });
       return true;
     } catch (e) {
       debugPrint('Error approving performer: $e');
@@ -394,9 +402,17 @@ class EventService {
 
   Future<bool> rejectPerformer(String performerId) async {
     try {
-      // TODO: Implement rejection status in database
-      // For now, we'll return true as a placeholder
-      debugPrint('Rejecting performer: $performerId');
+      await _supabase
+          .from('performers')
+          .update({'approval_status': 'rejected'})
+          .eq('id', performerId);
+      await _supabase.from('notifications').insert({
+        'user_id': performerId,
+        'title': 'Profile Rejected ❌',
+        'message':
+            'Your performer profile has been rejected. Please review the guidelines and try again.',
+        'type': 'error',
+      });
       return true;
     } catch (e) {
       debugPrint('Error rejecting performer: $e');

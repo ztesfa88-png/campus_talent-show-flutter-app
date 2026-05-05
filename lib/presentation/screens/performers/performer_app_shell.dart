@@ -103,6 +103,9 @@ class _Dashboard extends ConsumerStatefulWidget {
 class _DashboardState extends ConsumerState<_Dashboard> {
   final _supabase = Supabase.instance.client;
   Map<String, dynamic>? _stats;
+  String? _avatarUrl;
+  String? _bio;
+  Map<String, dynamic> _socialLinks = {};
 
   @override
   void initState() { super.initState(); _loadStats(); }
@@ -111,14 +114,58 @@ class _DashboardState extends ConsumerState<_Dashboard> {
     try {
       final userId = widget.user?.id;
       if (userId == null) return;
-      final votes = await _supabase.from('votes').select('score').eq('performer_id', userId);
-      final comments = await _supabase.from('feedback').select('rating').eq('performer_id', userId);
-      final voteList = (votes as List).cast<Map<String, dynamic>>();
-      final commentList = (comments as List).cast<Map<String, dynamic>>();
-      final avgScore = voteList.isEmpty ? 0.0 : voteList.map((v) => v['score'] as int).reduce((a, b) => a + b) / voteList.length;
-      final avgRating = commentList.isEmpty ? 0.0 : commentList.where((c) => c['rating'] != null).map((c) => c['rating'] as int).fold(0, (a, b) => a + b) / (commentList.where((c) => c['rating'] != null).length.clamp(1, 999));
-      if (mounted) setState(() => _stats = {'votes': voteList.length, 'avgScore': avgScore, 'comments': commentList.length, 'avgRating': avgRating});
+
+      final results = await Future.wait<dynamic>([
+        _supabase.from('votes').select('score').eq('performer_id', userId),
+        _supabase.from('feedback').select('rating').eq('performer_id', userId),
+        _supabase.from('performers')
+            .select('bio, avatar_url, social_links')
+            .eq('id', userId)
+            .maybeSingle(),
+      ]);
+
+      final voteList = (results[0] as List).cast<Map<String, dynamic>>();
+      final commentList = (results[1] as List).cast<Map<String, dynamic>>();
+      final profile = results[2] as Map<String, dynamic>?;
+
+      final avgScore = voteList.isEmpty ? 0.0
+          : voteList.map((v) => v['score'] as int).reduce((a, b) => a + b) / voteList.length;
+      final avgRating = commentList.isEmpty ? 0.0
+          : commentList.where((c) => c['rating'] != null).map((c) => c['rating'] as int).fold(0, (a, b) => a + b)
+              / (commentList.where((c) => c['rating'] != null).length.clamp(1, 999));
+
+      if (mounted) setState(() {
+        _stats = {'votes': voteList.length, 'avgScore': avgScore, 'comments': commentList.length, 'avgRating': avgRating};
+        _avatarUrl = profile?['avatar_url'] as String?;
+        _bio = profile?['bio'] as String?;
+        _socialLinks = Map<String, dynamic>.from(profile?['social_links'] ?? {});
+      });
     } catch (_) {}
+  }
+
+  /// Returns a value 0.0–1.0 based on filled profile fields.
+  double get _profileCompletion {
+    int filled = 0;
+    const total = 4; // name (always), bio, photo, social links
+    filled++; // name is always present
+    if (_bio != null && _bio!.trim().isNotEmpty) filled++;
+    if (_avatarUrl != null && _avatarUrl!.isNotEmpty) filled++;
+    if (_socialLinks.isNotEmpty) filled++;
+    return filled / total;
+  }
+
+  String get _profileCompletionLabel {
+    final pct = (_profileCompletion * 100).round();
+    return '$pct%';
+  }
+
+  String get _profileCompletionHint {
+    final missing = <String>[];
+    if (_bio == null || _bio!.trim().isEmpty) missing.add('bio');
+    if (_avatarUrl == null || _avatarUrl!.isEmpty) missing.add('profile photo');
+    if (_socialLinks.isEmpty) missing.add('social links');
+    if (missing.isEmpty) return 'Profile is complete! 🎉';
+    return 'Add ${missing.join(', ')} to reach 100%';
   }
 
   @override
@@ -138,8 +185,25 @@ class _DashboardState extends ConsumerState<_Dashboard> {
             child: Row(children: [
               Container(
                 width: 60, height: 60,
-                decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(18), border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 2)),
-                child: Center(child: Text(name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900))),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 2),
+                ),
+                child: _avatarUrl != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.network(
+                          _avatarUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Center(
+                            child: Text(name[0].toUpperCase(),
+                                style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
+                          ),
+                        ),
+                      )
+                    : Center(child: Text(name[0].toUpperCase(),
+                        style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900))),
               ),
               const SizedBox(width: 14),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -172,12 +236,24 @@ class _DashboardState extends ConsumerState<_Dashboard> {
           _Card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               const Text('Profile Completion', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 14)),
-              Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(12)), child: const Text('68%', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12))),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(12)),
+                child: Text(_profileCompletionLabel, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+              ),
             ]),
             const SizedBox(height: 12),
-            ClipRRect(borderRadius: BorderRadius.circular(8), child: const LinearProgressIndicator(value: 0.68, minHeight: 10, backgroundColor: Color(0xFFEEF2FF), valueColor: AlwaysStoppedAnimation(AppColors.primary))),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: _profileCompletion,
+                minHeight: 10,
+                backgroundColor: const Color(0xFFEEF2FF),
+                valueColor: const AlwaysStoppedAnimation(AppColors.primary),
+              ),
+            ),
             const SizedBox(height: 8),
-            const Text('Add profile photo, bio and social links to reach 100%', style: TextStyle(color: AppColors.textSub, fontSize: 12)),
+            Text(_profileCompletionHint, style: const TextStyle(color: AppColors.textSub, fontSize: 12)),
           ])),
           const SizedBox(height: 20),
           const Text('Upcoming Events', style: TextStyle(color: AppColors.textMain, fontSize: 16, fontWeight: FontWeight.w800)),
@@ -254,7 +330,6 @@ class _Portfolio extends ConsumerStatefulWidget {
 class _PortfolioState extends ConsumerState<_Portfolio> {
   final _supabase = Supabase.instance.client;
   final _bioCtrl = TextEditingController();
-  final _talentCtrl = TextEditingController();
   String? _avatarUrl;
   bool _uploading = false;
   bool _savingBio = false;
@@ -262,39 +337,68 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
   String _selectedTalent = 'other';
   String _selectedLevel = 'beginner';
 
+  // Social links — keyed by platform name
+  final List<Map<String, TextEditingController>> _socialControllers = [];
+
   static const _talents = ['music', 'dance', 'comedy', 'drama', 'magic', 'other'];
   static const _levels = ['beginner', 'intermediate', 'advanced'];
+  static const _socialPlatforms = ['Instagram', 'YouTube', 'TikTok', 'Twitter', 'Facebook', 'Website'];
 
   @override
   void initState() { super.initState(); _loadProfile(); }
+
   @override
-  void dispose() { _bioCtrl.dispose(); _talentCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _bioCtrl.dispose();
+    for (final m in _socialControllers) {
+      m['key']!.dispose();
+      m['value']!.dispose();
+    }
+    super.dispose();
+  }
 
   Future<void> _loadProfile() async {
     try {
       final userId = widget.user?.id;
       if (userId == null) return;
-      // Select without avatar_url first for compatibility, then try with it
-      Map<String, dynamic>? res;
-      try {
-        res = await _supabase.from('performers').select('bio, talent_type, experience_level, avatar_url').eq('id', userId).maybeSingle();
-      } catch (_) {
-        // avatar_url column may not exist yet � fallback without it
-        res = await _supabase.from('performers').select('bio, talent_type, experience_level').eq('id', userId).maybeSingle();
-      }
-      final data = res;
-      if (data != null && mounted) {
+      final res = await _supabase
+          .from('performers')
+          .select('bio, talent_type, experience_level, avatar_url, social_links')
+          .eq('id', userId)
+          .maybeSingle();
+      if (res != null && mounted) {
+        final links = Map<String, dynamic>.from(res['social_links'] ?? {});
+        final controllers = links.entries.map((e) => {
+          'key': TextEditingController(text: e.key),
+          'value': TextEditingController(text: e.value.toString()),
+        }).toList();
         setState(() {
-          _bioCtrl.text = data['bio'] as String? ?? '';
-          _selectedTalent = data['talent_type'] as String? ?? 'other';
-          _selectedLevel = data['experience_level'] as String? ?? 'beginner';
-          _avatarUrl = data['avatar_url'] as String?;
+          _bioCtrl.text = res['bio'] as String? ?? '';
+          _selectedTalent = res['talent_type'] as String? ?? 'other';
+          _selectedLevel = res['experience_level'] as String? ?? 'beginner';
+          _avatarUrl = res['avatar_url'] as String?;
+          _socialControllers
+            ..clear()
+            ..addAll(controllers);
           _loaded = true;
         });
       } else if (mounted) {
         setState(() => _loaded = true);
       }
     } catch (_) { if (mounted) setState(() => _loaded = true); }
+  }
+
+  void _addSocialLink() {
+    setState(() => _socialControllers.add({
+      'key': TextEditingController(),
+      'value': TextEditingController(),
+    }));
+  }
+
+  void _removeSocialLink(int index) {
+    _socialControllers[index]['key']!.dispose();
+    _socialControllers[index]['value']!.dispose();
+    setState(() => _socialControllers.removeAt(index));
   }
 
   Future<void> _pickAndUploadPhoto() async {
@@ -315,12 +419,7 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
       );
 
       final url = _supabase.storage.from('avatars').getPublicUrl(fileName);
-      try {
-        await _supabase.from('performers').update({'avatar_url': url}).eq('id', userId);
-      } catch (_) {
-        // avatar_url column missing � run: ALTER TABLE public.performers ADD COLUMN IF NOT EXISTS avatar_url TEXT;
-        throw Exception('avatar_url column missing. Run the SQL migration in Supabase.');
-      }
+      await _supabase.from('performers').update({'avatar_url': url}).eq('id', userId);
 
       if (mounted) {
         setState(() { _avatarUrl = url; _uploading = false; });
@@ -339,10 +438,20 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
     try {
       final userId = widget.user?.id;
       if (userId == null) return;
+
+      // Build social links map from controllers, skip empty entries
+      final socialLinks = <String, String>{};
+      for (final m in _socialControllers) {
+        final k = m['key']!.text.trim();
+        final v = m['value']!.text.trim();
+        if (k.isNotEmpty && v.isNotEmpty) socialLinks[k] = v;
+      }
+
       await _supabase.from('performers').update({
         'bio': _bioCtrl.text.trim(),
         'talent_type': _selectedTalent,
         'experience_level': _selectedLevel,
+        'social_links': socialLinks,
       }).eq('id', userId);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Profile saved! ✅', AppColors.accent));
     } catch (e) {
@@ -368,7 +477,6 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
           const SizedBox(height: 16),
           Center(
             child: Stack(children: [
-              // Avatar
               Container(
                 width: 100, height: 100,
                 decoration: BoxDecoration(
@@ -380,11 +488,12 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
                     ? ClipRRect(
                         borderRadius: BorderRadius.circular(30),
                         child: Image.network(_avatarUrl!, fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Center(child: Text(name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w900)))),
+                            errorBuilder: (_, __, ___) => Center(child: Text(name[0].toUpperCase(),
+                                style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w900)))),
                       )
-                    : Center(child: Text(name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w900))),
+                    : Center(child: Text(name[0].toUpperCase(),
+                        style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.w900))),
               ),
-              // Upload button overlay
               Positioned(
                 bottom: 0, right: 0,
                 child: GestureDetector(
@@ -417,7 +526,6 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
         _Card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Profile Info', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800, fontSize: 15)),
           const SizedBox(height: 14),
-          // Talent type
           const Text('Talent Type', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           Wrap(spacing: 8, runSpacing: 8, children: _talents.map((t) {
@@ -433,12 +541,12 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: sel ? Colors.transparent : AppColors.border),
                 ),
-                child: Text(t[0].toUpperCase() + t.substring(1), style: TextStyle(color: sel ? Colors.white : AppColors.textSub, fontWeight: sel ? FontWeight.w700 : FontWeight.normal, fontSize: 12)),
+                child: Text(t[0].toUpperCase() + t.substring(1),
+                    style: TextStyle(color: sel ? Colors.white : AppColors.textSub, fontWeight: sel ? FontWeight.w700 : FontWeight.normal, fontSize: 12)),
               ),
             );
           }).toList()),
           const SizedBox(height: 14),
-          // Experience level
           const Text('Experience Level', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           Row(children: _levels.map((l) {
@@ -456,23 +564,97 @@ class _PortfolioState extends ConsumerState<_Portfolio> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: sel ? Colors.transparent : AppColors.border),
                   ),
-                  child: Center(child: Text(l[0].toUpperCase() + l.substring(1), style: TextStyle(color: sel ? Colors.white : AppColors.textSub, fontWeight: sel ? FontWeight.w700 : FontWeight.normal, fontSize: 11))),
+                  child: Center(child: Text(l[0].toUpperCase() + l.substring(1),
+                      style: TextStyle(color: sel ? Colors.white : AppColors.textSub, fontWeight: sel ? FontWeight.w700 : FontWeight.normal, fontSize: 11))),
                 ),
               ),
             ));
           }).toList()),
           const SizedBox(height: 14),
-          // Bio
           const Text('Bio', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
           const SizedBox(height: 6),
           TextField(
             controller: _bioCtrl, maxLines: 4,
             decoration: const InputDecoration(hintText: 'Tell your audience about yourself...'),
           ),
+          const SizedBox(height: 20),
+          // ── Social Links ─────────────────────────────────────────────────
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            const Text('Social Links', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
+            GestureDetector(
+              onTap: _addSocialLink,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2FF),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.add_rounded, color: AppColors.primary, size: 14),
+                  SizedBox(width: 4),
+                  Text('Add', style: TextStyle(color: AppColors.primary, fontSize: 12, fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          if (_socialControllers.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)),
+              child: const Text('No social links yet. Tap "Add" to add one.', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
+            )
+          else
+            ...List.generate(_socialControllers.length, (i) {
+              final m = _socialControllers[i];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(children: [
+                  Expanded(
+                    flex: 2,
+                    child: DropdownButtonFormField<String>(
+                      value: _socialPlatforms.contains(m['key']!.text) ? m['key']!.text : null,
+                      decoration: const InputDecoration(
+                        hintText: 'Platform',
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                      items: _socialPlatforms.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 12)))).toList(),
+                      onChanged: (v) {
+                        if (v != null) setState(() => m['key']!.text = v);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    flex: 3,
+                    child: TextField(
+                      controller: m['value'],
+                      decoration: const InputDecoration(
+                        hintText: 'URL or handle',
+                        contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () => _removeSocialLink(i),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
+                      child: const Icon(Icons.close_rounded, color: AppColors.error, size: 16),
+                    ),
+                  ),
+                ]),
+              );
+            }),
           const SizedBox(height: 14),
           SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(
             onPressed: _savingBio ? null : _saveProfile,
-            icon: _savingBio ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.save_rounded),
+            icon: _savingBio
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.save_rounded),
             label: Text(_savingBio ? 'Saving...' : 'Save Profile'),
           )),
         ])),
@@ -801,7 +983,7 @@ class _ResultsState extends ConsumerState<_Results> with SingleTickerProviderSta
       if (mounted) {
         setState(() {
         _feedback = (fb as List).cast<Map<String, dynamic>>();
-        _voteStats = {'total': totalVotes, 'avg': avgScore};
+        _voteStats = {'total': totalVotes, 'avg': avgScore, 'voteRows': voteList};
         _loadingFeedback = false;
       });
       }
@@ -869,6 +1051,11 @@ class _ResultsState extends ConsumerState<_Results> with SingleTickerProviderSta
               const SizedBox(height: 10),
               ...List.generate(5, (i) {
                 final score = 5 - i;
+                // Count real votes for this score value
+                final voteRows = (_voteStats?['voteRows'] as List<Map<String, dynamic>>?) ?? [];
+                final countForScore = voteRows.where((v) => v['score'] == score).length;
+                final totalVotes = _voteStats?['total'] as int? ?? 0;
+                final fraction = totalVotes > 0 ? countForScore / totalVotes : 0.0;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Row(children: [
@@ -877,11 +1064,13 @@ class _ResultsState extends ConsumerState<_Results> with SingleTickerProviderSta
                     const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 14),
                     const SizedBox(width: 8),
                     Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(6), child: LinearProgressIndicator(
-                      value: 0.3 + (score * 0.1),
+                      value: fraction,
                       minHeight: 8,
                       backgroundColor: AppColors.surfaceAlt,
-                      valueColor: AlwaysStoppedAnimation(AppColors.primary.withValues(alpha: 0.6 + score * 0.08)),
+                      valueColor: AlwaysStoppedAnimation(AppColors.primary.withValues(alpha: 0.5 + fraction * 0.5)),
                     ))),
+                    const SizedBox(width: 8),
+                    SizedBox(width: 24, child: Text('$countForScore', style: const TextStyle(color: AppColors.textHint, fontSize: 11, fontWeight: FontWeight.w600))),
                   ]),
                 );
               }),
