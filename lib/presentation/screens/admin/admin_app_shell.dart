@@ -694,7 +694,7 @@ class _PerformersTabState extends ConsumerState<_PerformersTab> {
                                 child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.delete_outline_rounded, color: AppColors.error, size: 18)),
                               ),
                             ]),
-                            if (status != 'approved' || status != 'rejected') ...[
+                            if (status != 'approved' && status != 'rejected') ...[
                               const SizedBox(height: 12),
                               const Divider(height: 1),
                               const SizedBox(height: 12),
