@@ -7,7 +7,7 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../data/models/event.dart';
 import '../../../data/models/performer.dart';
-import '../../../data/services/hardened_voting_service.dart';
+import '../../../data/services/app_data_service.dart';
 
 // -----------------------------------------------------------------------------
 // STUDENT APP SHELL
@@ -53,7 +53,7 @@ class _StudentAppShellState extends ConsumerState<StudentAppShell> {
 
 // --- Bottom Navigation --------------------------------------------------------
 
-class _BottomNav extends StatelessWidget {
+class _BottomNav extends ConsumerWidget {
   const _BottomNav({required this.current, required this.onTap});
   final int current;
   final ValueChanged<int> onTap;
@@ -67,7 +67,10 @@ class _BottomNav extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final pendingAsync = ref.watch(pendingCountProvider);
+    final pendingCount = pendingAsync.maybeWhen(data: (n) => n, orElse: () => 0);
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -83,6 +86,8 @@ class _BottomNav extends StatelessWidget {
             children: List.generate(_items.length, (i) {
               final item = _items[i];
               final sel = current == i;
+              // Show badge on Vote tab (index 1) when there are pending items
+              final showBadge = i == 1 && pendingCount > 0;
               return GestureDetector(
                 onTap: () => onTap(i),
                 behavior: HitTestBehavior.opaque,
@@ -94,9 +99,34 @@ class _BottomNav extends StatelessWidget {
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(sel ? item.$1 : item.$2, color: sel ? AppColors.primary : AppColors.textHint, size: 22),
+                    Stack(clipBehavior: Clip.none, children: [
+                      Icon(sel ? item.$1 : item.$2,
+                          color: sel ? AppColors.primary : AppColors.textHint, size: 22),
+                      if (showBadge)
+                        Positioned(
+                          top: -4, right: -6,
+                          child: Container(
+                            width: 16, height: 16,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD97706),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: AppColors.surface, width: 1.5),
+                            ),
+                            child: Center(
+                              child: Text(
+                                pendingCount > 9 ? '9+' : '$pendingCount',
+                                style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w900),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ]),
                     const SizedBox(height: 2),
-                    Text(item.$3, style: TextStyle(color: sel ? AppColors.primary : AppColors.textHint, fontSize: 10, fontWeight: sel ? FontWeight.w700 : FontWeight.normal)),
+                    Text(item.$3, style: TextStyle(
+                      color: sel ? AppColors.primary : AppColors.textHint,
+                      fontSize: 10,
+                      fontWeight: sel ? FontWeight.w700 : FontWeight.normal,
+                    )),
                   ]),
                 ),
               );
@@ -107,7 +137,6 @@ class _BottomNav extends StatelessWidget {
     );
   }
 }
-
 // --- Home Tab -----------------------------------------------------------------
 
 class _HomeTab extends ConsumerWidget {
@@ -536,35 +565,43 @@ class _PerformerSheetState extends ConsumerState<_PerformerSheet> with SingleTic
     if (userId == null) return;
     setState(() => _submittingVote = true);
     try {
-      final result = await ref.read(hardenedVotingServiceProvider).submitVote(
-        eventId: widget.event.id,
-        userId: userId,
+      final svc = ref.read(appDataServiceProvider);
+      final result = await svc.submitVoteWithOfflineSupport(
         performerId: widget.performer.id,
+        eventId: widget.event.id,
         score: _score,
+        userId: userId,
       );
       if (!mounted) return;
       setState(() => _submittingVote = false);
-      if (result.success) {
-        // Also send vote-confirmed notification via AppDataService
+
+      if (result == VoteResult.queued) {
+        ref.invalidate(pendingCountProvider);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Row(children: [
+            Icon(Icons.wifi_off_rounded, color: Colors.white, size: 16),
+            SizedBox(width: 8),
+            Expanded(child: Text('You\'re offline — vote saved and will sync when back online')),
+          ]),
+          backgroundColor: const Color(0xFFD97706),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          duration: const Duration(seconds: 4),
+        ));
+      } else {
+        // Online — also send notifications via HardenedVotingService path
         try {
-          await ref.read(appDataServiceProvider).submitVoteNotification(
+          await svc.submitVoteNotification(
             userId: userId,
             performerId: widget.performer.id,
             score: _score,
           );
         } catch (_) {}
+        ref.invalidate(performersProvider);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Vote submitted! Score: $_score/5 ⭐'),
           backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
-        ref.invalidate(performersProvider);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(result.error ?? 'Vote failed'),
-          backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.all(16),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -586,24 +623,44 @@ class _PerformerSheetState extends ConsumerState<_PerformerSheet> with SingleTic
 
   Future<void> _submitFeedback() async {
     if (_commentCtrl.text.trim().length < 2) return;
+    final userId = ref.read(authStateProvider).user?.id;
+    if (userId == null) return;
     setState(() => _submittingFeedback = true);
     try {
-      await ref.read(appDataServiceProvider).submitFeedback(
+      final svc = ref.read(appDataServiceProvider);
+      final result = await svc.submitFeedbackWithOfflineSupport(
         performerId: widget.performer.id,
         eventId: widget.event.id,
         rating: _rating,
         comment: _commentCtrl.text.trim(),
+        userId: userId,
       );
       if (mounted) {
         setState(() => _submittingFeedback = false);
         _commentCtrl.clear();
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Feedback submitted!'),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
+        if (result == FeedbackResult.queued) {
+          ref.invalidate(pendingCountProvider);
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Row(children: [
+              Icon(Icons.wifi_off_rounded, color: Colors.white, size: 16),
+              SizedBox(width: 8),
+              Expanded(child: Text('You\'re offline — feedback saved and will sync when back online')),
+            ]),
+            backgroundColor: const Color(0xFFD97706),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 4),
+          ));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Text('Feedback submitted!'),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ));
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -1255,6 +1312,44 @@ class _ProfileTabState extends ConsumerState<_ProfileTab> {
           ]),
         ),
         const SizedBox(height: 24),
+        // Pending sync banner
+        ref.watch(pendingCountProvider).maybeWhen(
+          data: (count) => count > 0
+              ? Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.cloud_upload_rounded, color: Color(0xFFD97706), size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(
+                      '$count action${count == 1 ? '' : 's'} waiting to sync',
+                      style: const TextStyle(color: Color(0xFFD97706), fontWeight: FontWeight.w600, fontSize: 13),
+                    )),
+                    GestureDetector(
+                      onTap: () {
+                        ref.invalidate(syncProvider);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('Syncing...'),
+                          duration: Duration(seconds: 2),
+                          behavior: SnackBarBehavior.floating,
+                        ));
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(color: const Color(0xFFD97706), borderRadius: BorderRadius.circular(10)),
+                        child: const Text('Sync now', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ]),
+                )
+              : const SizedBox.shrink(),
+          orElse: () => const SizedBox.shrink(),
+        ),
         const Text('Account', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1)),
         const SizedBox(height: 10),
         _ProfileTile(
