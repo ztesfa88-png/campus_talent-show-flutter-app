@@ -592,10 +592,24 @@ class _PerformersTabState extends ConsumerState<_PerformersTab> {
   }
 
   Future<void> _delete(String id) async {
-    final ok = await _confirm(context, 'Remove Performer', 'Permanently remove this performer?', 'Remove');
+    final ok = await _confirm(context, 'Remove Performer', 'Permanently remove this performer and all their data?', 'Remove');
     if (!ok) return;
-    await _supabase.from('performers').delete().eq('id', id);
-    _load();
+    try {
+      // Use the Edge Function to fully delete from auth.users (cascades everywhere)
+      final res = await _supabase.functions.invoke(
+        'delete-user',
+        body: {'user_id': id},
+      );
+      if (res.status != 200) {
+        final msg = (res.data as Map?)?['error'] as String? ?? 'Delete failed';
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $msg', AppColors.error));
+        return;
+      }
+      _load();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Performer removed ✅', AppColors.accent));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $e', AppColors.error));
+    }
   }
 
   List<Map<String, dynamic>> get _filtered {
@@ -753,11 +767,21 @@ class _UsersTabState extends ConsumerState<_UsersTab> {
   }
 
   Future<void> _deleteUser(String id) async {
-    final ok = await _confirm(context, 'Delete User', 'Remove this user from the system?', 'Delete');
+    final ok = await _confirm(context, 'Delete User', 'Permanently remove this user and all their data (votes, feedback, notifications)?', 'Delete');
     if (!ok) return;
     try {
-      await _supabase.from('users').delete().eq('id', id);
+      // Call the Edge Function which deletes from auth.users (cascades to all tables)
+      final res = await _supabase.functions.invoke(
+        'delete-user',
+        body: {'user_id': id},
+      );
+      if (res.status != 200) {
+        final msg = (res.data as Map?)?['error'] as String? ?? 'Delete failed';
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $msg', AppColors.error));
+        return;
+      }
       _load();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('User deleted ✅', AppColors.accent));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $e', AppColors.error));
     }
