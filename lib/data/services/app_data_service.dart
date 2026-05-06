@@ -212,12 +212,14 @@ class AppDataService {
         'title': 'Vote Synced ✅',
         'message': 'Your offline vote (score: $score/5) has been submitted.',
         'type': 'success',
+        'data': {'event_id': eventId, 'deep_link': 'leaderboard'},
       });
       await _supabase.from('notifications').insert({
         'user_id': performerId,
         'title': 'You received a vote! 🗳️',
         'message': 'Someone voted for you with a score of $score/5.',
         'type': 'info',
+        'data': {'event_id': eventId, 'deep_link': 'results'},
       });
     } catch (_) {}
   }
@@ -241,6 +243,7 @@ class AppDataService {
         'title': 'New feedback received! $stars',
         'message': comment.length > 60 ? '${comment.substring(0, 60)}...' : comment,
         'type': 'info',
+        'data': {'event_id': p['event_id'], 'deep_link': 'results'},
       });
     } catch (_) {}
   }
@@ -559,18 +562,18 @@ class AppDataService {
       'voted_at': now.toIso8601String(),
     });
   }
-
-  /// Send vote-confirmation notifications after HardenedVotingService submits.
   Future<void> submitVoteNotification({
     required String userId,
     required String performerId,
     required int score,
+    required String eventId,
   }) async {
     await _supabase.from('notifications').insert({
       'user_id': userId,
       'title': 'Vote Confirmed ✅',
       'message': 'Your vote (score: $score/5) has been submitted successfully.',
       'type': 'success',
+      'data': {'event_id': eventId, 'deep_link': 'leaderboard'},
     });
     try {
       await _supabase.from('notifications').insert({
@@ -578,6 +581,7 @@ class AppDataService {
         'title': 'You received a vote! 🗳️',
         'message': 'Someone voted for you with a score of $score/5. Keep it up!',
         'type': 'info',
+        'data': {'event_id': eventId, 'deep_link': 'results'},
       });
     } catch (_) {}
   }
@@ -613,6 +617,7 @@ class AppDataService {
             ? '${comment.trim().substring(0, 60)}...'
             : comment.trim(),
         'type': 'info',
+        'data': {'event_id': eventId, 'deep_link': 'results'},
       });
     } catch (_) {}
   }

@@ -39,7 +39,7 @@ class _StudentAppShellState extends ConsumerState<StudentAppShell> {
           onEventChanged: (v) => setState(() => _selectedEvent = v)),
       _VoteTab(selectedEvent: _selectedEvent),
       _LeaderboardTab(event: _selectedEvent),
-      _NotificationsTab(userId: user.id),
+      _NotificationsTab(userId: user.id, onSwitchTab: (i) => setState(() => _tab = i)),
       _ProfileTab(user: user),
     ];
 
@@ -590,12 +590,13 @@ class _PerformerSheetState extends ConsumerState<_PerformerSheet> with SingleTic
           duration: const Duration(seconds: 4),
         ));
       } else {
-        // Online — also send notifications via HardenedVotingService path
+        // Online — also send notifications
         try {
           await svc.submitVoteNotification(
             userId: userId,
             performerId: widget.performer.id,
             score: _score,
+            eventId: widget.event.id,
           );
         } catch (_) {}
         ref.invalidate(performersProvider);
@@ -1090,8 +1091,9 @@ class _LeaderboardTab extends ConsumerWidget {
 // --- Notifications Tab --------------------------------------------------------
 
 class _NotificationsTab extends ConsumerStatefulWidget {
-  const _NotificationsTab({required this.userId});
+  const _NotificationsTab({required this.userId, required this.onSwitchTab});
   final String userId;
+  final ValueChanged<int> onSwitchTab;
 
   @override
   ConsumerState<_NotificationsTab> createState() => _NotificationsTabState();
@@ -1117,6 +1119,29 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
     try {
       await _supabase.from('notifications').delete().eq('id', id);
     } catch (_) {}
+  }
+
+  /// Reads the `data` field of a notification and navigates to the
+  /// relevant tab. Supported deep_link values:
+  ///   "leaderboard" → tab 2
+  ///   "vote"        → tab 1
+  ///   "home"        → tab 0
+  void _handleDeepLink(Map<String, dynamic> data) {
+    final link = data['deep_link'] as String?;
+    switch (link) {
+      case 'leaderboard':
+        widget.onSwitchTab(2);
+        break;
+      case 'vote':
+        widget.onSwitchTab(1);
+        break;
+      case 'home':
+        widget.onSwitchTab(0);
+        break;
+      // 'results' is a performer-side link — ignore on student shell
+      default:
+        break;
+    }
   }
 
   @override
@@ -1191,8 +1216,7 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
                   return GestureDetector(
                     onTap: () {
                       if (!n.isRead) _markRead(n.id);
-                      // Deep-link: if notification carries an event, switch to leaderboard
-                      // (handled by parent via tab index — just mark read for now)
+                      if (n.data.isNotEmpty) _handleDeepLink(n.data);
                     },
                     child: Dismissible(
                       key: Key(n.id),
@@ -1237,6 +1261,10 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
                           const SizedBox(height: 4),
                           Text('${n.createdAt.hour.toString().padLeft(2, '0')}:${n.createdAt.minute.toString().padLeft(2, '0')}',
                               style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+                          if (n.data.containsKey('deep_link')) ...[
+                            const SizedBox(height: 4),
+                            const Icon(Icons.chevron_right_rounded, color: AppColors.textHint, size: 16),
+                          ],
                         ]),
                       ]),
                     ),

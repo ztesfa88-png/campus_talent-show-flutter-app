@@ -575,6 +575,7 @@ class _PerformersTabState extends ConsumerState<_PerformersTab> {
               ? 'Your performer profile has been approved. You can now register for events!'
               : 'Your performer profile has been rejected. Please review the guidelines and try again.',
           'type': isApproved ? 'success' : 'error',
+          'data': isApproved ? {'deep_link': 'events'} : {'deep_link': 'portfolio'},
         });
       } catch (_) {} // non-fatal
 
@@ -1428,6 +1429,9 @@ class _RegistrationsSheetState extends State<_RegistrationsSheet> {
             ? 'Your registration for "${widget.eventTitle}" has been approved. Get ready to perform!'
             : 'Your registration for "${widget.eventTitle}" was not approved this time.',
         'type': status == 'approved' ? 'success' : 'error',
+        'data': status == 'approved'
+            ? {'event_id': widget.eventId, 'deep_link': 'events'}
+            : {'deep_link': 'events'},
       });
 
       await _load();

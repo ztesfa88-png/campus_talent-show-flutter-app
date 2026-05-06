@@ -33,7 +33,7 @@ class _PerformerAppShellState extends ConsumerState<PerformerAppShell> {
     final user = ref.watch(authStateProvider).user;
     final bodies = [
       _Dashboard(user: user),
-      _Notifications(user: user),
+      _Notifications(user: user, onSwitchTab: (i) => setState(() => _tab = i)),
       _Portfolio(user: user),
       _Events(user: user),
       _Results(user: user),
@@ -1144,11 +1144,12 @@ class _VoteStat extends StatelessWidget {
 
 
 
-// ─── Notifications (appended) ─────────────────────────────────────────────────
+// ─── Notifications ────────────────────────────────────────────────────────────
 
 class _Notifications extends ConsumerStatefulWidget {
-  const _Notifications({required this.user});
+  const _Notifications({required this.user, required this.onSwitchTab});
   final dynamic user;
+  final ValueChanged<int> onSwitchTab;
   @override
   ConsumerState<_Notifications> createState() => _NotificationsState();
 }
@@ -1160,6 +1161,32 @@ class _NotificationsState extends ConsumerState<_Notifications> {
 
   @override
   void initState() { super.initState(); _load(); }
+
+  /// Reads the `data` field and navigates to the relevant performer tab.
+  /// Supported deep_link values:
+  ///   "results"   → tab 4 (Results)
+  ///   "events"    → tab 3 (Events)
+  ///   "portfolio" → tab 2 (Portfolio)
+  ///   "dashboard" → tab 0 (Dashboard)
+  void _handleDeepLink(Map<String, dynamic> data) {
+    final link = data['deep_link'] as String?;
+    switch (link) {
+      case 'results':
+        widget.onSwitchTab(4);
+        break;
+      case 'events':
+        widget.onSwitchTab(3);
+        break;
+      case 'portfolio':
+        widget.onSwitchTab(2);
+        break;
+      case 'dashboard':
+        widget.onSwitchTab(0);
+        break;
+      default:
+        break;
+    }
+  }
 
   Future<void> _load() async {
     setState(() => _loading = true);
@@ -1277,7 +1304,13 @@ class _NotificationsState extends ConsumerState<_Notifications> {
                         final color = typeColors[type] ?? AppColors.primary;
                         final icon = typeIcons[type] ?? Icons.notifications_rounded;
                         return GestureDetector(
-                          onTap: () => _markRead(n['id'] as String),
+                          onTap: () {
+                            _markRead(n['id'] as String);
+                            final rawData = n['data'];
+                            if (rawData is Map && rawData.isNotEmpty) {
+                              _handleDeepLink(Map<String, dynamic>.from(rawData));
+                            }
+                          },
                           child: Container(
                             margin: const EdgeInsets.only(bottom: 10),
                             padding: const EdgeInsets.all(14),
@@ -1312,6 +1345,10 @@ class _NotificationsState extends ConsumerState<_Notifications> {
                                     '${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}',
                                     style: const TextStyle(color: AppColors.textHint, fontSize: 10),
                                   ),
+                                ],
+                                if ((n['data'] is Map) && (n['data'] as Map).containsKey('deep_link')) ...[
+                                  const SizedBox(height: 4),
+                                  const Icon(Icons.chevron_right_rounded, color: AppColors.textHint, size: 16),
                                 ],
                               ]),
                             ]),
