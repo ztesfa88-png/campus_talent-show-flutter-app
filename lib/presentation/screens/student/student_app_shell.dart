@@ -7,6 +7,7 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../data/models/event.dart';
 import '../../../data/models/performer.dart';
+import '../../../data/services/hardened_voting_service.dart';
 
 // -----------------------------------------------------------------------------
 // STUDENT APP SHELL
@@ -531,18 +532,39 @@ class _PerformerSheetState extends ConsumerState<_PerformerSheet> with SingleTic
   void dispose() { _tabCtrl.dispose(); _commentCtrl.dispose(); super.dispose(); }
 
   Future<void> _submitVote() async {
+    final userId = ref.read(authStateProvider).user?.id;
+    if (userId == null) return;
     setState(() => _submittingVote = true);
     try {
-      await ref.read(appDataServiceProvider).submitVote(
-        performerId: widget.performer.id,
+      final result = await ref.read(hardenedVotingServiceProvider).submitVote(
         eventId: widget.event.id,
+        userId: userId,
+        performerId: widget.performer.id,
         score: _score,
       );
-      if (mounted) {
-        setState(() => _submittingVote = false);
+      if (!mounted) return;
+      setState(() => _submittingVote = false);
+      if (result.success) {
+        // Also send vote-confirmed notification via AppDataService
+        try {
+          await ref.read(appDataServiceProvider).submitVoteNotification(
+            userId: userId,
+            performerId: widget.performer.id,
+            score: _score,
+          );
+        } catch (_) {}
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Vote submitted! Score: $_score/5'),
+          content: Text('Vote submitted! Score: $_score/5 ⭐'),
           backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ));
+        ref.invalidate(performersProvider);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(result.error ?? 'Vote failed'),
+          backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.all(16),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1023,20 +1045,20 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
 
   Future<void> _markRead(String id) async {
     try {
-      await _supabase
-          .from('notifications')
-          .update({'is_read': true})
-          .eq('id', id);
+      await _supabase.from('notifications').update({'is_read': true}).eq('id', id);
     } catch (_) {}
   }
 
   Future<void> _markAllRead(List notifications) async {
     try {
-      await _supabase
-          .from('notifications')
-          .update({'is_read': true})
-          .eq('user_id', widget.userId)
-          .eq('is_read', false);
+      await _supabase.from('notifications').update({'is_read': true})
+          .eq('user_id', widget.userId).eq('is_read', false);
+    } catch (_) {}
+  }
+
+  Future<void> _deleteNotification(String id) async {
+    try {
+      await _supabase.from('notifications').delete().eq('id', id);
     } catch (_) {}
   }
 
@@ -1110,8 +1132,23 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
                   final color = typeColors[type] ?? AppColors.primary;
                   final icon = typeIcons[type] ?? Icons.notifications_rounded;
                   return GestureDetector(
-                    onTap: n.isRead ? null : () => _markRead(n.id),
-                    child: Container(
+                    onTap: () {
+                      if (!n.isRead) _markRead(n.id);
+                      // Deep-link: if notification carries an event, switch to leaderboard
+                      // (handled by parent via tab index — just mark read for now)
+                    },
+                    child: Dismissible(
+                      key: Key(n.id),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(16)),
+                        child: const Icon(Icons.delete_outline_rounded, color: AppColors.error, size: 22),
+                      ),
+                      onDismissed: (_) => _deleteNotification(n.id),
+                      child: Container(
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
@@ -1146,6 +1183,7 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
                         ]),
                       ]),
                     ),
+                    ), // Dismissible
                   );
                 },
               ),
@@ -1158,17 +1196,43 @@ class _NotificationsTabState extends ConsumerState<_NotificationsTab> {
 
 // --- Profile Tab --------------------------------------------------------------
 
-class _ProfileTab extends ConsumerWidget {
+class _ProfileTab extends ConsumerStatefulWidget {
   const _ProfileTab({required this.user});
   final dynamic user;
+  @override
+  ConsumerState<_ProfileTab> createState() => _ProfileTabState();
+}
+
+class _ProfileTabState extends ConsumerState<_ProfileTab> {
+  final _supabase = Supabase.instance.client;
+  List<Map<String, dynamic>> _voteHistory = [];
+  bool _loadingHistory = true;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final name = user?.name ?? 'Student';
-    final email = user?.email ?? '';
+  void initState() { super.initState(); _loadHistory(); }
+
+  Future<void> _loadHistory() async {
+    try {
+      final userId = widget.user?.id;
+      if (userId == null) return;
+      final res = await _supabase
+          .from('votes')
+          .select('id, score, voted_at, event_id, performer_id, events(title), performers(users(name, email))')
+          .eq('user_id', userId)
+          .order('voted_at', ascending: false)
+          .limit(20);
+      if (mounted) setState(() { _voteHistory = (res as List).cast<Map<String, dynamic>>(); _loadingHistory = false; });
+    } catch (_) { if (mounted) setState(() => _loadingHistory = false); }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = widget.user?.name ?? 'Student';
+    final email = widget.user?.email ?? '';
     return ListView(
       padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 16, 20, 24),
       children: [
+        // Profile card
         Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(gradient: AppColors.heroGradient, borderRadius: BorderRadius.circular(24), boxShadow: AppColors.primaryShadow),
@@ -1206,8 +1270,8 @@ class _ProfileTab extends ConsumerWidget {
               title: const Text('Voting Security', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800)),
               content: const Text(
                 '• One vote per performer per event\n'
-                '• 15-second cooldown between votes\n'
-                '• Vote limit enforced per event\n'
+                '• Rate limit: 10 votes/min, 50 votes/hour\n'
+                '• Self-voting prevented\n'
                 '• Voting deadline respected\n'
                 '• All rules enforced server-side via Supabase RLS',
                 style: TextStyle(color: AppColors.textSub, fontSize: 13, height: 1.6),
@@ -1262,7 +1326,55 @@ class _ProfileTab extends ConsumerWidget {
             ),
           ),
         ),
-        const SizedBox(height: 28),
+        const SizedBox(height: 24),
+        // Vote history
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          const Text('My Vote History', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1)),
+          GestureDetector(
+            onTap: _loadHistory,
+            child: Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.border)), child: const Icon(Icons.refresh_rounded, color: AppColors.textSub, size: 16)),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        if (_loadingHistory)
+          const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2)))
+        else if (_voteHistory.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.border)),
+            child: const Center(child: Text('No votes cast yet', style: TextStyle(color: AppColors.textSub, fontSize: 14))),
+          )
+        else
+          ..._voteHistory.map((v) {
+            final score = v['score'] as int? ?? 0;
+            final eventTitle = (v['events'] as Map?)?['title'] as String? ?? 'Unknown event';
+            final performerUser = (v['performers'] as Map?)?['users'] as Map?;
+            final performerName = performerUser?['name'] as String? ?? performerUser?['email'] as String? ?? 'Unknown';
+            final votedAt = DateTime.tryParse(v['voted_at'] as String? ?? '');
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: AppColors.border), boxShadow: AppColors.cardShadow),
+              child: Row(children: [
+                Container(
+                  width: 44, height: 44,
+                  decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(13)),
+                  child: Center(child: Text('$score', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900))),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(performerName, style: const TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(eventTitle, style: const TextStyle(color: AppColors.textSub, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+                ])),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Row(mainAxisSize: MainAxisSize.min, children: List.generate(5, (i) => Icon(i < score ? Icons.star_rounded : Icons.star_border_rounded, color: const Color(0xFFF59E0B), size: 12))),
+                  if (votedAt != null)
+                    Text('${votedAt.day}/${votedAt.month}/${votedAt.year}', style: const TextStyle(color: AppColors.textHint, fontSize: 10)),
+                ]),
+              ]),
+            );
+          }),
+        const SizedBox(height: 24),
         SizedBox(
           height: 52,
           child: ElevatedButton.icon(

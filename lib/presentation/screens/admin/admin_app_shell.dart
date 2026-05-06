@@ -248,12 +248,22 @@ class _DashboardTabState extends ConsumerState<_DashboardTab> {
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                       ))
                     else if (_data != null)
-                      Row(children: [
-                        _HeroStatCard('${_data!['totalVotes']}', 'Votes', Icons.how_to_vote_rounded),
-                        const SizedBox(width: 10),
-                        _HeroStatCard('${_data!['totalUsers']}', 'Users', Icons.people_rounded),
-                        const SizedBox(width: 10),
-                        _HeroStatCard('${_data!['activeUsers']}', 'Students', Icons.school_rounded),
+                      Column(children: [
+                        Row(children: [
+                          _HeroStatCard('${_data!['totalVotes']}', 'Votes', Icons.how_to_vote_rounded),
+                          const SizedBox(width: 10),
+                          _HeroStatCard('${_data!['totalUsers']}', 'Users', Icons.people_rounded),
+                          const SizedBox(width: 10),
+                          _HeroStatCard('${_data!['activeUsers']}', 'Students', Icons.school_rounded),
+                        ]),
+                        const SizedBox(height: 10),
+                        Row(children: [
+                          _HeroStatCard('${_data!['totalPerformers']}', 'Performers', Icons.mic_rounded),
+                          const SizedBox(width: 10),
+                          _HeroStatCard('${_data!['pendingPerformers']}', 'Pending', Icons.pending_rounded),
+                          const SizedBox(width: 10),
+                          _HeroStatCard('${_data!['totalEvents']}', 'Events', Icons.event_rounded),
+                        ]),
                       ]),
                   ]),
                 ),
@@ -348,7 +358,7 @@ class _DashboardTabState extends ConsumerState<_DashboardTab> {
             // ── Votes by Category ───────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('📊 Votes by Category', style: TextStyle(color: AppColors.textMain, fontSize: 17, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 12),
@@ -394,6 +404,44 @@ class _DashboardTabState extends ConsumerState<_DashboardTab> {
                         ]),
                       );
                     }).toList());
+                  }()),
+                ]),
+              ),
+            ),
+
+            // ── Event Status Breakdown ──────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('📅 Events by Status', style: TextStyle(color: AppColors.textMain, fontSize: 17, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 12),
+                  _Card(child: () {
+                    final statusMap = (_data!['eventStatusCounts'] as Map<String, dynamic>).cast<String, int>();
+                    if (statusMap.isEmpty) {
+                      return const Padding(padding: EdgeInsets.all(8), child: Center(child: Text('No events yet', style: TextStyle(color: AppColors.textSub))));
+                    }
+                    final statusColors = <String, Color>{
+                      'upcoming': const Color(0xFFD97706),
+                      'active': AppColors.accent,
+                      'completed': AppColors.primary,
+                      'cancelled': AppColors.error,
+                    };
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: statusMap.entries.map((e) {
+                        final color = statusColors[e.key] ?? AppColors.textSub;
+                        return Column(children: [
+                          Container(
+                            width: 52, height: 52,
+                            decoration: BoxDecoration(color: color.withValues(alpha: 0.1), shape: BoxShape.circle, border: Border.all(color: color.withValues(alpha: 0.3))),
+                            child: Center(child: Text('${e.value}', style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w900))),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(e.key[0].toUpperCase() + e.key.substring(1), style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
+                        ]);
+                      }).toList(),
+                    );
                   }()),
                 ]),
               ),
@@ -1268,6 +1316,22 @@ class _EventsTabState extends ConsumerState<_EventsTab> {
                             Expanded(child: Text('Expires: ${ev.formattedExpiresAt!}', style: const TextStyle(color: AppColors.error, fontSize: 11), overflow: TextOverflow.ellipsis)),
                           ]),
                         ],
+                        if (ev.registrationDeadline != null) ...[
+                          const SizedBox(height: 2),
+                          Row(children: [
+                            Icon(Icons.how_to_reg_rounded, color: ev.isRegistrationOpen ? const Color(0xFFD97706) : AppColors.textHint, size: 12),
+                            const SizedBox(width: 4),
+                            Expanded(child: Text(
+                              'Reg deadline: ${ev.formattedRegistrationDeadline!}',
+                              style: TextStyle(color: ev.isRegistrationOpen ? const Color(0xFFD97706) : AppColors.textHint, fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            )),
+                          ]),
+                        ],
+                        if (ev.description != null && ev.description!.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(ev.description!, style: const TextStyle(color: AppColors.textSub, fontSize: 11, height: 1.4), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        ],
                       ])),
                       PopupMenuButton<String>(
                         color: AppColors.surface,
@@ -1539,6 +1603,11 @@ class _AdminsTabState extends ConsumerState<_AdminsTab> {
   final _emailCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  // Broadcast fields
+  final _broadcastTitleCtrl = TextEditingController();
+  final _broadcastMsgCtrl = TextEditingController();
+  String _broadcastRole = 'all';
+  bool _broadcasting = false;
   bool _obscure = true, _submitting = false;
   List<Map<String, dynamic>> _admins = [];
   bool _loading = true;
@@ -1546,7 +1615,11 @@ class _AdminsTabState extends ConsumerState<_AdminsTab> {
   @override
   void initState() { super.initState(); _loadAdmins(); }
   @override
-  void dispose() { _emailCtrl.dispose(); _nameCtrl.dispose(); _passCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _emailCtrl.dispose(); _nameCtrl.dispose(); _passCtrl.dispose();
+    _broadcastTitleCtrl.dispose(); _broadcastMsgCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _loadAdmins() async {
     setState(() => _loading = true);
@@ -1604,6 +1677,41 @@ class _AdminsTabState extends ConsumerState<_AdminsTab> {
     }
   }
 
+  Future<void> _sendBroadcast() async {
+    final title = _broadcastTitleCtrl.text.trim();
+    final msg = _broadcastMsgCtrl.text.trim();
+    if (title.isEmpty || msg.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(_snack('Enter both title and message', AppColors.warning));
+      return;
+    }
+    setState(() => _broadcasting = true);
+    try {
+      var query = _supabase.from('users').select('id');
+      if (_broadcastRole != 'all') {
+        query = query.eq('role', _broadcastRole) as dynamic;
+      }
+      final users = await query;
+      final notifications = (users as List).map((u) => {
+        'user_id': u['id'],
+        'title': title,
+        'message': msg,
+        'type': 'info',
+      }).toList();
+      if (notifications.isNotEmpty) {
+        await _supabase.from('notifications').insert(notifications);
+      }
+      _broadcastTitleCtrl.clear();
+      _broadcastMsgCtrl.clear();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        _snack('Broadcast sent to ${notifications.length} user${notifications.length == 1 ? '' : 's'} ✅', AppColors.accent),
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $e', AppColors.error));
+    } finally {
+      if (mounted) setState(() => _broadcasting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -1611,11 +1719,69 @@ class _AdminsTabState extends ConsumerState<_AdminsTab> {
       children: [
         const Text('Admins', style: TextStyle(color: AppColors.textMain, fontSize: 24, fontWeight: FontWeight.w900)),
         const SizedBox(height: 4),
-        const Text('Manage admin accounts', style: TextStyle(color: AppColors.textSub, fontSize: 12)),
+        const Text('Manage admin accounts & broadcast notifications', style: TextStyle(color: AppColors.textSub, fontSize: 12)),
         const SizedBox(height: 20),
-        // Create admin form
+
+        // ── Broadcast Notifications ──────────────────────────────────────
         _Card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('? Create New Admin', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800, fontSize: 15)),
+          Row(children: [
+            Container(width: 36, height: 36, decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(11)), child: const Icon(Icons.campaign_rounded, color: Colors.white, size: 20)),
+            const SizedBox(width: 10),
+            const Text('Broadcast Notification', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800, fontSize: 15)),
+          ]),
+          const SizedBox(height: 4),
+          const Text('Send a message to all users or by role', style: TextStyle(color: AppColors.textSub, fontSize: 12)),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _broadcastTitleCtrl,
+            decoration: const InputDecoration(hintText: 'Notification title *', prefixIcon: Icon(Icons.title_rounded, size: 20)),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _broadcastMsgCtrl,
+            maxLines: 3,
+            decoration: const InputDecoration(hintText: 'Message body *'),
+          ),
+          const SizedBox(height: 12),
+          // Role selector
+          const Text('Send to', style: TextStyle(color: AppColors.textSub, fontSize: 12, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Row(children: [
+            for (final role in ['all', 'student', 'performer', 'admin']) ...[
+              Expanded(child: GestureDetector(
+                onTap: () => setState(() => _broadcastRole = role),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  decoration: BoxDecoration(
+                    gradient: _broadcastRole == role ? AppColors.primaryGradient : null,
+                    color: _broadcastRole == role ? null : AppColors.surfaceAlt,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _broadcastRole == role ? Colors.transparent : AppColors.border),
+                  ),
+                  child: Center(child: Text(
+                    role[0].toUpperCase() + role.substring(1),
+                    style: TextStyle(color: _broadcastRole == role ? Colors.white : AppColors.textSub, fontWeight: FontWeight.w700, fontSize: 11),
+                  )),
+                ),
+              )),
+              if (role != 'admin') const SizedBox(width: 6),
+            ],
+          ]),
+          const SizedBox(height: 14),
+          SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(
+            onPressed: _broadcasting ? null : _sendBroadcast,
+            icon: _broadcasting
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.send_rounded),
+            label: Text(_broadcasting ? 'Sending...' : 'Send Broadcast'),
+          )),
+        ])),
+        const SizedBox(height: 16),
+
+        // ── Create admin form ────────────────────────────────────────────
+        _Card(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Create New Admin', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w800, fontSize: 15)),
           const SizedBox(height: 4),
           const Text('Creates a new account with admin role', style: TextStyle(color: AppColors.textSub, fontSize: 12)),
           const SizedBox(height: 16),
@@ -1632,17 +1798,15 @@ class _AdminsTabState extends ConsumerState<_AdminsTab> {
             ),
           ),
           const SizedBox(height: 14),
-          SizedBox(
-            height: 50, width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _submitting ? null : _addAdmin,
-              icon: _submitting ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.shield_rounded),
-              label: Text(_submitting ? 'Creating...' : 'Create Admin'),
-            ),
-          ),
+          SizedBox(height: 50, width: double.infinity, child: ElevatedButton.icon(
+            onPressed: _submitting ? null : _addAdmin,
+            icon: _submitting ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.shield_rounded),
+            label: Text(_submitting ? 'Creating...' : 'Create Admin'),
+          )),
         ])),
         const SizedBox(height: 12),
-        // Promote existing
+
+        // ── Promote existing ─────────────────────────────────────────────
         GestureDetector(
           onTap: _promoteExisting,
           child: _Card(p: const EdgeInsets.all(14), child: Row(children: [
@@ -1656,6 +1820,8 @@ class _AdminsTabState extends ConsumerState<_AdminsTab> {
           ])),
         ),
         const SizedBox(height: 20),
+
+        // ── Current admins list ──────────────────────────────────────────
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           const Text('Current Admins', style: TextStyle(color: AppColors.textMain, fontSize: 17, fontWeight: FontWeight.w800)),
           GestureDetector(onTap: _loadAdmins, child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.border)), child: const Icon(Icons.refresh_rounded, color: AppColors.textSub, size: 18))),

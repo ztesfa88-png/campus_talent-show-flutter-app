@@ -1049,7 +1049,14 @@ class _ResultsState extends ConsumerState<_Results> with SingleTickerProviderSta
               const SizedBox(height: 16),
               const Text('Score Distribution', style: TextStyle(color: AppColors.textMain, fontWeight: FontWeight.w700, fontSize: 14)),
               const SizedBox(height: 10),
-              ...List.generate(5, (i) {
+              if (_voteStats == null || (_voteStats!['total'] as int) == 0)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(color: AppColors.surfaceAlt, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
+                  child: const Center(child: Text('No votes received yet', style: TextStyle(color: AppColors.textSub, fontSize: 13))),
+                )
+              else
+                ...List.generate(5, (i) {
                 final score = 5 - i;
                 // Count real votes for this score value
                 final voteRows = (_voteStats?['voteRows'] as List<Map<String, dynamic>>?) ?? [];

@@ -273,6 +273,28 @@ class AppDataService {
     } catch (_) {} // non-fatal
   }
 
+  /// Send vote-confirmation notifications after HardenedVotingService submits.
+  Future<void> submitVoteNotification({
+    required String userId,
+    required String performerId,
+    required int score,
+  }) async {
+    await _supabase.from('notifications').insert({
+      'user_id': userId,
+      'title': 'Vote Confirmed ✅',
+      'message': 'Your vote (score: $score/5) has been submitted successfully.',
+      'type': 'success',
+    });
+    try {
+      await _supabase.from('notifications').insert({
+        'user_id': performerId,
+        'title': 'You received a vote! 🗳️',
+        'message': 'Someone voted for you with a score of $score/5. Keep it up!',
+        'type': 'info',
+      });
+    } catch (_) {}
+  }
+
   Future<void> submitFeedback({
     required String performerId,
     required String eventId,
@@ -398,11 +420,13 @@ class AppDataService {
     final votes = await _supabase.from('votes').select('id, performer_id, score');
     final performers = await _supabase
         .from('performers')
-        .select('id, talent_type, users!inner(name,email)');
+        .select('id, talent_type, approval_status, users!inner(name,email)');
+    final events = await _supabase.from('events').select('id, status');
 
     final usersList = (users as List).cast<Map<String, dynamic>>();
     final votesList = (votes as List).cast<Map<String, dynamic>>();
     final performerRows = (performers as List).cast<Map<String, dynamic>>();
+    final eventsList = (events as List).cast<Map<String, dynamic>>();
 
     final votesByPerformer = <String, int>{};
     for (final row in votesList) {
@@ -428,10 +452,21 @@ class AppDataService {
       categoryVotes[category] = (categoryVotes[category] ?? 0) + (performer['votes'] as int);
     }
 
+    // Event status breakdown
+    final eventStatusCounts = <String, int>{};
+    for (final e in eventsList) {
+      final s = e['status'] as String? ?? 'upcoming';
+      eventStatusCounts[s] = (eventStatusCounts[s] ?? 0) + 1;
+    }
+
     return {
       'totalUsers': usersList.length,
       'totalVotes': votesList.length,
       'activeUsers': usersList.where((u) => u['role'] == 'student').length,
+      'totalPerformers': performerRows.length,
+      'pendingPerformers': performerRows.where((p) => p['approval_status'] == 'pending').length,
+      'totalEvents': eventsList.length,
+      'eventStatusCounts': eventStatusCounts,
       'topPerformers': topPerformers.take(5).toList(),
       'votesPerCategory': categoryVotes,
     };

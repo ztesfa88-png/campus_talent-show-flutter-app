@@ -1,3 +1,13 @@
+-- =============================================================================
+-- DEPRECATED — superseded by supabase/schema.sql and
+-- supabase/migrations/001_missing_columns.sql
+--
+-- This file is kept for historical reference only.
+-- DO NOT run this on a new or existing project — use the files above instead.
+-- The categories table, image_url/video_url columns, and duplicate triggers
+-- defined here conflict with the current schema.
+-- =============================================================================
+
 -- Production upgrade for Campus Talent Show
 -- Run this in Supabase SQL editor after base schema.
 
@@ -43,12 +53,15 @@ before insert on votes
 for each row execute procedure prevent_duplicate_vote();
 
 -- Daily vote cap (optional security hardening)
-create or replace function enforce_daily_vote_cap(max_votes int default 40)
+-- NOTE: trigger functions cannot have declared arguments in PostgreSQL.
+-- The cap value is hardcoded as a local variable instead.
+create or replace function enforce_daily_vote_cap()
 returns trigger
 language plpgsql
 as $$
 declare
   daily_count int;
+  max_votes   int := 40;
 begin
   select count(*) into daily_count
   from votes
@@ -66,7 +79,7 @@ $$;
 drop trigger if exists trg_enforce_daily_vote_cap on votes;
 create trigger trg_enforce_daily_vote_cap
 before insert on votes
-for each row execute procedure enforce_daily_vote_cap(40);
+for each row execute procedure enforce_daily_vote_cap();
 
 -- Notification types for required events.
 alter table notifications
