@@ -37,24 +37,28 @@ Deno.serve(async (req: Request) => {
     const { user_id } = (await req.json()) as { user_id?: string };
     if (!user_id) return json({ error: "user_id is required" }, 400);
 
-    // 2. Authenticate caller
+    // 2. Get the Authorization header
     const authHeader = req.headers.get("Authorization") ?? "";
     if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
 
-    const callerClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_ANON_KEY") ?? "",
-      { global: { headers: { Authorization: authHeader } } },
-    );
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-    const {
-      data: { user: caller },
-      error: authErr,
-    } = await callerClient.auth.getUser();
+    // 3. Verify caller identity using their JWT
+    const callerClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: { user: caller }, error: authErr } =
+      await callerClient.auth.getUser();
     if (authErr || !caller) return json({ error: "Unauthorized" }, 401);
 
-    // 3. Verify admin role
-    const { data: callerRow } = await callerClient
+    // 4. Verify admin role — use service role client to bypass RLS
+    //    (avoids issues where the caller's RLS policy blocks reading their own role)
+    const adminClient = createClient(supabaseUrl, serviceKey);
+
+    const { data: callerRow } = await adminClient
       .from("users")
       .select("role")
       .eq("id", caller.id)
@@ -64,17 +68,12 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Forbidden: admin role required" }, 403);
     }
 
-    // 4. Prevent self-deletion
+    // 5. Prevent self-deletion
     if (caller.id === user_id) {
       return json({ error: "Cannot delete your own account" }, 400);
     }
 
-    // 5. Delete via service role key — cascades to all tables
-    const adminClient = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-    );
-
+    // 6. Delete via service role key — cascades to all tables
     const { error: deleteErr } =
       await adminClient.auth.admin.deleteUser(user_id);
     if (deleteErr) return json({ error: deleteErr.message }, 500);
