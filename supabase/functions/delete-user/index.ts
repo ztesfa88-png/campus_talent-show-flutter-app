@@ -73,7 +73,10 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Cannot delete your own account" }, 400);
     }
 
-    // 6. Delete via service role key — cascades to all tables
+    // 6. Sign out all sessions for this user first, then delete
+    await adminClient.auth.admin.signOut(user_id, "global");
+
+    // 7. Delete via service role key — cascades to all tables
     const { error: deleteErr } =
       await adminClient.auth.admin.deleteUser(user_id);
     if (deleteErr) return json({ error: deleteErr.message }, 500);

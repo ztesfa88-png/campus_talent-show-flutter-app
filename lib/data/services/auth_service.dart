@@ -43,6 +43,10 @@ class AuthService {
       final supaUser = _supabase.auth.currentSession?.user ?? _supabase.auth.currentUser;
       if (supaUser != null) {
         _currentUser = await _loadUserProfile(supaUser);
+        // If profile is gone (deleted user), sign out silently
+        if (_currentUser == null) {
+          await _supabase.auth.signOut().catchError((_) {});
+        }
       }
     } catch (e) {
       debugPrint('Error initializing auth: $e');
@@ -84,6 +88,12 @@ class AuthService {
         ),
       );
       _currentUser = await _loadUserProfile(response.user!);
+      // If the user was deleted by an admin, their public.users row is gone.
+      // Sign them out immediately.
+      if (_currentUser == null) {
+        await _supabase.auth.signOut();
+        throw Exception('This account has been removed. Please contact an administrator.');
+      }
       return _currentUser;
     } on supa.AuthException catch (e) {
       // Provide a cleaner error message for email-not-confirmed
@@ -227,13 +237,23 @@ class AuthService {
     required String? fallbackName,
     required UserRole fallbackRole,
   }) async {
-    // NOTE: The Supabase trigger handle_new_user() already inserts into public.users
-    // We only need to handle the performers table here (trigger doesn't do that by default)
     final metadata = supabaseUser.userMetadata ?? <String, dynamic>{};
     final roleStr = (metadata['role'] as String?) ?? fallbackRole.value;
     final role = UserRole.fromString(roleStr);
 
-    // Only upsert users table if trigger might not have run (e.g. on sign-in)
+    // Verify the user still exists in auth.users via a lightweight check.
+    // If they were deleted by an admin, their JWT may still be valid briefly
+    // but their auth record is gone — don't recreate their profile.
+    try {
+      final authCheck = await _supabase.auth.getUser();
+      if (authCheck.user == null) {
+        debugPrint('_ensureUserProfile: auth user gone, skipping profile creation');
+        return;
+      }
+    } catch (_) {
+      return; // Can't verify — skip
+    }
+
     try {
       final existing = await _supabase
           .from('users')
@@ -242,7 +262,6 @@ class AuthService {
           .maybeSingle();
 
       if (existing == null) {
-        // Trigger didn't create the row — insert manually
         await _supabase.from('users').insert({
           'id': supabaseUser.id,
           'email': supabaseUser.email ?? '',
@@ -253,7 +272,6 @@ class AuthService {
         });
         debugPrint('users insert OK (trigger missed) for ${supabaseUser.id}');
       } else {
-        // Row exists — just update name/role if needed
         await _supabase.from('users').update({
           'name': (metadata['name'] as String?) ?? fallbackName,
           'role': roleStr,
@@ -265,7 +283,6 @@ class AuthService {
       debugPrint('users ensure error (non-fatal): $e');
     }
 
-    // Ensure performers row exists for performer role
     if (role == UserRole.performer) {
       try {
         final existingPerformer = await _supabase
@@ -289,16 +306,17 @@ class AuthService {
     }
   }
 
-  Future<app_user.User> _loadUserProfile(supa.User supabaseUser) async {
+  Future<app_user.User?> _loadUserProfile(supa.User supabaseUser) async {
     try {
       final profile = await _supabase
           .from('users')
           .select()
           .eq('id', supabaseUser.id)
-          .single();
+          .maybeSingle();
+      if (profile == null) return null; // deleted user
       return app_user.User.fromJson(Map<String, dynamic>.from(profile));
     } catch (_) {
-      return _mapSupabaseUser(supabaseUser);
+      return null;
     }
   }
 
