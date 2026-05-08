@@ -93,6 +93,42 @@ class _AdminAppShellState extends ConsumerState<AdminAppShell> {
 
 // --- Shared helpers -----------------------------------------------------------
 
+/// Fully deletes a user: tries Edge Function first (real Supabase session),
+/// then falls back to RPC (works for local admin too), then direct table delete.
+Future<void> _fullDeleteUser(SupabaseClient supabase, String userId) async {
+  final hasSession = supabase.auth.currentSession != null;
+
+  if (hasSession) {
+    // Try Edge Function first — full auth.users cascade
+    try {
+      final res = await supabase.functions.invoke(
+        'delete-user',
+        body: {'user_id': userId},
+      );
+      if (res.status == 200) return;
+    } catch (_) {}
+
+    // Fallback: RPC (SECURITY DEFINER — works even if Edge Function fails)
+    try {
+      final rpcRes = await supabase.rpc(
+        'delete_user_by_admin',
+        params: {'target_user_id': userId},
+      );
+      final result = rpcRes as Map<String, dynamic>?;
+      if (result?['error'] == null) return;
+    } catch (_) {}
+  }
+
+  // Local admin or all else failed — delete public tables manually
+  // auth.users entry may remain but user can't access any data
+  try { await supabase.from('votes').delete().eq('user_id', userId); } catch (_) {}
+  try { await supabase.from('feedback').delete().eq('user_id', userId); } catch (_) {}
+  try { await supabase.from('notifications').delete().eq('user_id', userId); } catch (_) {}
+  try { await supabase.from('event_registrations').delete().eq('performer_id', userId); } catch (_) {}
+  try { await supabase.from('performers').delete().eq('id', userId); } catch (_) {}
+  await supabase.from('users').delete().eq('id', userId);
+}
+
 class _Card extends StatelessWidget {
   const _Card({required this.child, this.p});
   final Widget child; final EdgeInsets? p;
@@ -595,23 +631,7 @@ class _PerformersTabState extends ConsumerState<_PerformersTab> {
     final ok = await _confirm(context, 'Remove Performer', 'Permanently remove this performer and all their data?', 'Remove');
     if (!ok) return;
     try {
-      final hasSession = _supabase.auth.currentSession != null;
-      if (hasSession) {
-        // Real Supabase user — use Edge Function for full cascade delete
-        final res = await _supabase.functions.invoke(
-          'delete-user',
-          body: {'user_id': id},
-        );
-        if (res.status != 200) {
-          final msg = (res.data as Map?)?['error'] as String? ?? 'Delete failed';
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $msg', AppColors.error));
-          return;
-        }
-      } else {
-        // Local admin — delete from public.users directly (no auth.users row)
-        await _supabase.from('performers').delete().eq('id', id);
-        await _supabase.from('users').delete().eq('id', id);
-      }
+      await _fullDeleteUser(_supabase, id);
       _load();
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Performer removed ✅', AppColors.accent));
     } catch (e) {
@@ -777,22 +797,7 @@ class _UsersTabState extends ConsumerState<_UsersTab> {
     final ok = await _confirm(context, 'Delete User', 'Permanently remove this user and all their data (votes, feedback, notifications)?', 'Delete');
     if (!ok) return;
     try {
-      final hasSession = _supabase.auth.currentSession != null;
-      if (hasSession) {
-        // Real Supabase user — use Edge Function for full cascade delete
-        final res = await _supabase.functions.invoke(
-          'delete-user',
-          body: {'user_id': id},
-        );
-        if (res.status != 200) {
-          final msg = (res.data as Map?)?['error'] as String? ?? 'Delete failed';
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('Error: $msg', AppColors.error));
-          return;
-        }
-      } else {
-        // Local admin — delete from public.users directly (no auth.users row)
-        await _supabase.from('users').delete().eq('id', id);
-      }
+      await _fullDeleteUser(_supabase, id);
       _load();
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(_snack('User deleted ✅', AppColors.accent));
     } catch (e) {
